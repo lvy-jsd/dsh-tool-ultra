@@ -1,0 +1,68 @@
+{
+  "name": "@lvy-jsd/dsh-tool-ultra-pack-office",
+  "version": "0.5.0",
+  "description": "Tool Ultra office pack: Word (.docx), Excel (.xlsx), and PDF document reading and manipulation.",
+  "license": "Apache-2.0",
+  "author": "lvy-jsd",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "!lib/.tsbuildinfo",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b .",
+    "prepack": "tsc -b ."
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-tool-ultra",
+    "tools",
+    "office",
+    "word",
+    "excel",
+    "pdf"
+  ],
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "mammoth": "^1.8.0",
+    "pdf-lib": "^1.17.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "toolCatalog": {
+      "tools": {
+        "office_doc_read": { "group": "office", "category": "system" },
+        "office_sheet_read": { "group": "office", "category": "system" },
+        "office_sheet_write": { "group": "office", "category": "system" },
+        "office_pdf_info": { "group": "office", "category": "system" }
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lvy-jsd/dsh-tool-ultra.git",
+    "directory": "packages/dsh-tool-ultra-pack-office"
+  }
+}

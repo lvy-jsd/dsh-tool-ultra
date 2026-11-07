@@ -1,0 +1,44 @@
+{
+  "name": "@lvy-jsd/dsh-tool-ultra-pack-db",
+  "version": "0.1.0",
+  "description": "Tool Ultra database pack: DuckDB-based data analysis and SQL querying.",
+  "license": "Apache-2.0",
+  "author": "lvy-jsd",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b .",
+    "prepack": "tsc -b ."
+  },
+  "dependencies": {
+    "duckdb": "^1.1.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "toolCatalog": {
+      "tools": {
+        "db_query": { "group": "data", "category": "system" },
+        "db_load_file": { "group": "data", "category": "system" }
+      }
+    }
+  }
+}

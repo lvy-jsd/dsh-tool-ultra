@@ -65,6 +65,9 @@ dsh plugin --profile web add @lvy-jsd/dsh-tool-ultra-panel
 | [`@lvy-jsd/dsh-tool-ultra-pack-web`](packages/dsh-tool-ultra-pack-web) | 原生工具包：`web_read` 把网页正文转成干净的 Markdown（Readability + turndown），`web_links` 列出页面链接。默认拒绝访问内网地址。 |
 | [`@lvy-jsd/dsh-tool-ultra-pack-mcp`](packages/dsh-tool-ultra-pack-mcp) | 通过 DSH 的 MCP 客户端启动预设的 MCP 服务器：记忆、顺序思考、Context7、Playwright、文件系统无需 key 就能用；GitHub、SearXNG、Brave、Tavily、Firecrawl、Notion、高德地图在填好 key 后启动。用 `mcp_presets` 查看状态。 |
 | [`@lvy-jsd/dsh-tool-ultra-pack-media`](packages/dsh-tool-ultra-pack-media) | 原生工具包，无需 API key，用代码生成图片、音乐和视频：`html_render` 用 HTML/CSS 设计图片（不需要浏览器），也能把 CSS 动画做成动图，`svg_render` 把 SVG 画稿渲染成 PNG/JPEG/WebP，`chart_render` 用 Vega-Lite 画图表，`music_render` 用真实采样乐器（SoundFont，自动母带处理）演奏乐谱，存成 WAV 和 MIDI，`video_render` 用 CSS 动画的 HTML 页面、SVG 或照片场景加转场、字幕和配乐做成 MP4（用服务器上的 ffmpeg），`audio_transcribe` 用本地 SenseVoice / Whisper 模型把语音转成带时间戳的文字，并区分说话人、标出情绪和笑声、音乐等声音，`video_understand` 把视频变成带时间的关键帧故事板图片和文字稿。拒绝外部链接和外部数据。 |
+| [`@lvy-jsd/dsh-tool-ultra-pack-gc`](packages/dsh-tool-ultra-pack-gc) | 制品与临时媒体垃圾回收：按日期分区存储（`[YYYY-MM-DD]`）、定时留存清理与 LRU 容量淘汰。 |
+| [`@lvy-jsd/dsh-tool-ultra-pack-db`](packages/dsh-tool-ultra-pack-db) | 嵌入式 DuckDB 内存数据分析：SQL 零拷贝直接查询分析 CSV、Parquet 与 JSON，无需大文件塞入上下文。 |
+| [`@lvy-jsd/dsh-tool-ultra-pack-office`](packages/dsh-tool-ultra-pack-office) | 办公文档处理包：Word (.docx) 文本提取、Excel (.xlsx) 结构化读写及 PDF 基础元数据检视。 |
 | [`@lvy-jsd/dsh-tool-ultra-devices`](packages/dsh-tool-ultra-devices) | 设备命名空间：Swiftnest 连进来的设备工具放在 `/device/<设备>` 下，可用 `device:current`、`device:all`、`device:<名字>` 加载，离线设备会标出来。 |
 | [`@lvy-jsd/dsh-tool-manager-dsbot-entry`](packages/dsh-tool-manager-dsbot-entry) | 已弃用，不再发版。在 ds-bot 的设置弹窗里加一行"工具管理"，点开显示面板。 |
 | [`@lvy-jsd/dsh-tool-manager`](packages/dsh-tool-manager) | 旧的核心包名：转出 `@lvy-jsd/dsh-tool-ultra-core`，让已有配置继续可用。 |
