@@ -41,6 +41,18 @@
       "path": "packages/dsh-tool-ultra-pack-media"
     },
     {
+      "path": "packages/dsh-tool-ultra-pack-gc"
+    },
+    {
+      "path": "packages/dsh-tool-ultra-pack-db"
+    },
+    {
+      "path": "packages/dsh-tool-ultra-pack-office"
+    },
+    {
+      "path": "packages/dsh-tool-ultra-pack-code-insight"
+    },
+    {
       "path": "packages/dsh-tool-ultra-panel"
     },
     {

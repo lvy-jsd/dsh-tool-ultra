@@ -1,0 +1,7 @@
+# @lvy-jsd/dsh-tool-ultra-pack-db bundle patch
+- insert:
+    - id: tool-ultra-pack-db
+      name: '@lvy-jsd/dsh-tool-ultra-pack-db'
+      config:
+        # Default read-only mode for safety.
+        readOnly: true

@@ -1,0 +1,7 @@
+# @lvy-jsd/dsh-tool-ultra-pack-code-insight bundle patch
+- insert:
+    - id: tool-ultra-pack-code-insight
+      name: '@lvy-jsd/dsh-tool-ultra-pack-code-insight'
+      config:
+        maxDepth: 3
+        maxSymbols: 200

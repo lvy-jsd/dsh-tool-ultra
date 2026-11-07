@@ -1,0 +1,11 @@
+# @lvy-jsd/dsh-tool-ultra-pack-gc bundle patch
+- insert:
+    - id: tool-ultra-pack-gc
+      name: '@lvy-jsd/dsh-tool-ultra-pack-gc'
+      config:
+        # Retention window in days. Folders older than this will be swept.
+        retentionDays: 7
+        # Max storage in megabytes for artifacts before LRU eviction.
+        maxMegabytes: 2048
+        # Interval between automated background sweeps in ms (0 = disabled, manual only).
+        autoIntervalMs: 86400000

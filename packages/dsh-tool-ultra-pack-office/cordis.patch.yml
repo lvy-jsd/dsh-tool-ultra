@@ -1,0 +1,7 @@
+# @lvy-jsd/dsh-tool-ultra-pack-office bundle patch
+- insert:
+    - id: tool-ultra-pack-office
+      name: '@lvy-jsd/dsh-tool-ultra-pack-office'
+      config:
+        # Enable optional LibreOffice backend if available
+        enableAdvancedRendering: false
