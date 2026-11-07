@@ -50,6 +50,9 @@
       "path": "packages/dsh-tool-ultra-pack-office"
     },
     {
+      "path": "packages/dsh-tool-ultra-pack-code-insight"
+    },
+    {
       "path": "packages/dsh-tool-ultra-panel"
     },
     {

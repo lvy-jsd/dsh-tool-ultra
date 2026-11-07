@@ -1,0 +1,75 @@
+{
+  "name": "@lvy-jsd/dsh-tool-ultra-pack-code-insight",
+  "version": "0.5.0",
+  "description": "Tool Ultra code insight pack: semantic AST outlines, symbol extraction, and call graphs for TS/JS, Python, Rust, and Go.",
+  "license": "Apache-2.0",
+  "author": "lvy-jsd",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "!lib/.tsbuildinfo",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b .",
+    "prepack": "tsc -b ."
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-tool-ultra",
+    "tools",
+    "code",
+    "ast",
+    "symbols",
+    "outline",
+    "callgraph"
+  ],
+  "dependencies": {
+    "@babel/parser": "^7.29.13"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "toolCatalog": {
+      "tools": {
+        "code_outline": {
+          "group": "code",
+          "category": "system"
+        },
+        "code_symbols": {
+          "group": "code",
+          "category": "system"
+        },
+        "code_callgraph": {
+          "group": "code",
+          "category": "system"
+        }
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lvy-jsd/dsh-tool-ultra.git",
+    "directory": "packages/dsh-tool-ultra-pack-code-insight"
+  }
+}
