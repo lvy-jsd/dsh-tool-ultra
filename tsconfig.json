@@ -2,73 +2,7 @@
   "files": [],
   "references": [
     {
-      "path": "packages/dsh-tool-ultra-core"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-risk-gate"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-persist"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-classifier-rules"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-capability-bridge"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-devices"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-attribution-scan"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-classifier-llm"
-    },
-    {
-      "path": "packages/create-dsh-tool-ultra-plugin"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-essentials"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-web"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-mcp"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-media"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-gc"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-db"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-office"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-code-insight"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-image-creative"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-pack-audio-creative"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-panel"
-    },
-    {
-      "path": "packages/dsh-tool-ultra-panel/tsconfig.client.json"
-    },
-    {
-      "path": "packages/dsh-tool-manager-dsbot-entry"
-    },
-    {
-      "path": "packages/dsh-tool-manager-dsbot-entry/tsconfig.client.json"
+      "path": "./tsconfig.projects.generated.json"
     }
   ]
 }

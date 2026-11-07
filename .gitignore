@@ -2,6 +2,8 @@ node_modules/
 # build output (and the tsc -b cache inside it)
 packages/*/lib/
 *.tsbuildinfo
+# Local, discovered TypeScript solution (regenerated before build/typecheck).
+/tsconfig.projects.generated.json
 # Rust sidecar build output. sidecar/bin/ is filled by `npm run build:sidecar`
 # before publishing and is never committed.
 packages/dsh-tool-ultra-core/sidecar/target/

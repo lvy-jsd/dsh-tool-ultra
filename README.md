@@ -112,9 +112,16 @@ is in the core README and [docs/DESIGN.md](docs/DESIGN.md) §11.
 
 Every package is written in TypeScript (`src/`) and compiled to `lib/`
 (JavaScript plus `.d.ts` type declarations); `lib/` is build output and not
-committed. The root `tsconfig.json` lists the packages (project references); the
-two browser halves (`client.ts`) have their own `tsconfig.client.json`, because
-DSH loads them as classic scripts, not modules.
+committed. Before build/typecheck, `scripts/generate-ts-projects.mjs` discovers
+`packages/*/tsconfig.json` and `tsconfig.client.json` for real package directories
+and writes ignored `tsconfig.projects.generated.json`. Root `tsconfig.json` is a
+stable entry pointing to that local solution. Add a package directory and its
+config; **do not edit a shared project list**. Discovery is sorted, non-recursive,
+skips symlink directories and ignores test/extra configs. Browser halves keep
+separate `tsconfig.client.json` because DSH loads classic scripts, not modules.
+Run `npm run generate:ts-projects` after adding/removing a package for editor-only
+use; `npm install`, build and typecheck regenerate it automatically. Bare `tsc -b`
+requires a previously generated solution; prefer the npm commands on fresh clones.
 
 ```sh
 npm install                        # also links your local DSH host packages (scripts/link-host.mjs)

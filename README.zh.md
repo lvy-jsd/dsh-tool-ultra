@@ -106,8 +106,13 @@ README 和 [docs/DESIGN.md](docs/DESIGN.md) 第 11 节。
 ## 开发
 
 所有包都用 TypeScript 编写（`src/`），编译到 `lib/`（JavaScript 加 `.d.ts` 类型声明）；
-`lib/` 是构建产物，不进 git。根目录 `tsconfig.json` 列出所有包（项目引用）；两个浏览器端模块
-（`client.ts`）有各自的 `tsconfig.client.json`，因为 DSH 把它们当作经典脚本而不是模块加载。
+`lib/` 是构建产物，不进 git。构建和类型检查前，`scripts/generate-ts-projects.mjs`
+自动扫描真实包目录中的 `packages/*/tsconfig.json` 与 `tsconfig.client.json`，按固定顺序生成
+不进 git 的 `tsconfig.projects.generated.json`；根 `tsconfig.json` 只是固定入口。
+**新增包只加目录和本包配置，不再改共享引用列表**。扫描不递归到依赖、不跟随目录符号链接，
+不把测试或其它额外配置误当构建入口。浏览器端模块仍用独立 `tsconfig.client.json`，因为 DSH
+把它们当经典脚本加载。仅更新编辑器索引时可执行 `npm run generate:ts-projects`；
+`npm install`、构建和类型检查会自动生成。新克隆优先使用 npm 命令，裸 `tsc -b` 需先生成解决方案。
 
 ```sh
 npm install                        # 同时把本机 DSH 的宿主包链接进来（scripts/link-host.mjs）

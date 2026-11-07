@@ -10,8 +10,9 @@
   "scripts": {
     "postinstall": "node scripts/link-host.mjs",
     "prepare": "npm run build",
-    "build": "tsc -b",
-    "typecheck": "tsc -b",
+    "generate:ts-projects": "node scripts/generate-ts-projects.mjs",
+    "build": "node scripts/generate-ts-projects.mjs && tsc -b",
+    "typecheck": "node scripts/generate-ts-projects.mjs && tsc -b",
     "test": "npm run build && node --test test/unit/*.test.mjs && node test/e2e.mjs",
     "build:sidecar": "node scripts/build-sidecar.mjs"
   },
