@@ -1,6 +1,6 @@
 {
   "name": "@lvy-jsd/dsh-tool-ultra-pack-db",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Tool Ultra database pack: DuckDB-based data analysis and SQL querying.",
   "license": "Apache-2.0",
   "author": "lvy-jsd",
