@@ -14,6 +14,7 @@
 // - `testkit_deny`, which hides names from the calling agent with its own
 //   restrict({ deny }), the way MCP connector governance does;
 // - with config simulatePresetLayer, tools that exist only in a preset layer.
+import { appendFileSync, existsSync } from 'node:fs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { simulatePresetLayer } from './preset.js'
 
@@ -34,6 +35,41 @@ function fakeTool(name) {
 
 export function apply(ctx, config = {}) {
   if (config.simulatePresetLayer) simulatePresetLayer(ctx)
+
+  // e2e determinism (issue #45): let the harness observe and gate the catalog
+  // rebuilds, so a background scan (attribution) can be asserted pre- and
+  // post-completion without a guessed sleep. Both are test-only, off unless the
+  // env names a file.
+  const rebuildLog = process.env.TM_TESTKIT_REBUILD_LOG
+  const gateFile = process.env.TM_TESTKIT_GATE_REFRESH
+  if (rebuildLog || gateFile) {
+    ctx.inject(['toolCatalog'], (c) => {
+      if (rebuildLog) ctx.on('tool-catalog/after-rebuild', () => {
+        try { appendFileSync(rebuildLog, 'rebuild\n') } catch { /* test-only */ }
+      })
+      if (gateFile && typeof c.toolCatalog.refresh === 'function') {
+        // Hold the scan's refresh() — and thus the post-scan rebuild — until the
+        // harness opens the gate, so the pre-scan listing is stable. Log a
+        // "gate" line when the held refresh runs, so the harness can wait for
+        // exactly the post-scan rebuild (not an arbitrary rebuild count).
+        const original = c.toolCatalog.refresh
+        let opened = false
+        c.toolCatalog.refresh = () => {
+          if (opened) return original()
+          const check = () => {
+            if (existsSync(gateFile)) {
+              if (opened) return
+              opened = true
+              if (rebuildLog) { try { appendFileSync(rebuildLog, 'gate\n') } catch { /* test-only */ } }
+              return original()
+            }
+            setTimeout(check, 20)
+          }
+          check()
+        }
+      }
+    })
+  }
 
   let disposers = []
   let generation = 0

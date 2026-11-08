@@ -416,13 +416,18 @@ const classifierCalls = readFileSync(join(root, 'llm-main.log.jsonl'), 'utf8').t
 check('llm: one classification request per group, not per rebuild', classifierCalls.length > 0 && classifierCalls.length <= 8, `${classifierCalls.length} classifier call(s)`)
 
 // --- attr profile: group by the defining plugin package -------------------------
+// The scan starts after the first build and refreshes the catalog when it
+// finishes. The test kit holds that refresh behind a gate file and logs a
+// "gate" line when it runs: step 0 lists before the gate opens (prefix
+// fallback), step 1 opens the gate and waits for the post-scan rebuild before
+// listing (attribution).
 console.log('# attr profile')
 const at = await run('attr', 'attr-main', [
   call('tools_ls', { path: '/uncategorized' }),               // 0 the scan starts after this build
-  { ...call('tools_ls', { path: '/uncategorized' }), delayMs: 3000 }, // 1 scanned by now
+  { ...call('tools_ls', { path: '/uncategorized' }), openGate: join(root, 'attr-gate'), waitFor: join(root, 'attr-rebuilds') }, // 1 scanned by now
   call('tools_ls', { query: 'fake' }),                        // 2
   { text: 'done' },                                           // 3
-], ['attribute'])
+], ['attribute'], { TM_TESTKIT_REBUILD_LOG: join(root, 'attr-rebuilds'), TM_TESTKIT_GATE_REFRESH: join(root, 'attr-gate') })
 contains('attr: before the scan, phone tools use the prefix fallback', at[1].lastContent, 'phone/')
 check('attr: after the scan, the prefix group is gone', !/\bphone\//.test(at[2].lastContent), at[2].lastContent)
 contains('attr: undeclared testkit tools group under their package', at[3].lastContent, '/tm-testkit/phone_fake_tap')
@@ -435,10 +440,10 @@ contains('attr: MCP tools keep the per-server group', at[3].lastContent, '/uncat
 console.log('# attr-rules profile')
 const ar = await run('attr-rules', 'attr-rules-main', [
   call('tools_ls', { path: '/' }),                            // 0 the scan starts after this build
-  { ...call('tools_ls', { query: '_dev_' }), delayMs: 3000 }, // 1 scanned by now
+  { ...call('tools_ls', { query: '_dev_' }), openGate: join(root, 'attr-rules-gate'), waitFor: join(root, 'attr-rules-rebuilds') }, // 1 scanned by now
   call('tools_ls', { path: '/uncategorized' }),               // 2
   { text: 'done' },                                           // 3
-], ['attribute with rules'])
+], ['attribute with rules'], { TM_TESTKIT_REBUILD_LOG: join(root, 'attr-rules-rebuilds'), TM_TESTKIT_GATE_REFRESH: join(root, 'attr-rules-gate') })
 contains('attr-rules: the scan renamed the group after the package', ar[2].lastContent, '/tm-testkit-devices/phone_dev_tap')
 check('attr-rules: phone, desktop and connector tools stay out of /uncategorized', !/\/uncategorized\/tm-testkit-devices\//.test(ar[2].lastContent), ar[2].lastContent)
 contains('attr-rules: the renamed group inherits device', ar[2].lastContent, '/device/tm-testkit-devices/desktop_dev_click')
