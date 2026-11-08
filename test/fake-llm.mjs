@@ -20,7 +20,7 @@
 // and `systemFake`: the fake MCP tools the system prompt names (in PTC mode the
 // callable tools are SDK declarations there, not tool schemas).
 import { createServer } from 'node:http'
-import { readFileSync, appendFileSync } from 'node:fs'
+import { readFileSync, appendFileSync, writeFileSync } from 'node:fs'
 
 const [port, scriptPath, logPath] = process.argv.slice(2)
 const script = JSON.parse(readFileSync(scriptPath, 'utf8'))
@@ -51,6 +51,20 @@ function nextStep(agent, last) {
 function systemText(messages) {
   return messages.filter((m) => m.role === 'system' || m.role === 'developer')
     .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n')
+}
+
+// Wait until `file` contains `marker` (a line written by the in-process test
+// kit), so a step can wait for an in-process event — the post-scan catalog
+// rebuild — instead of guessing a sleep.
+async function waitForFile(file, marker, timeoutMs = 30000) {
+  const start = Date.now()
+  for (;;) {
+    let text = ''
+    try { text = readFileSync(file, 'utf8') } catch { /* not there yet */ }
+    if (text.split('\n').includes(marker)) return
+    if (Date.now() - start > timeoutMs) throw new Error(`waitFor timed out: ${file} has no "${marker}" line`)
+    await new Promise((r) => setTimeout(r, 50))
+  }
 }
 
 function sse(res, chunks) {
@@ -100,10 +114,20 @@ createServer((req, res) => {
       lastRole: messages.at(-1)?.role,
       lastContent: lastContent.slice(0, 6000),
     }) + '\n')
-    // `delayMs` holds the answer back, so background work (a source scan, a
-    // classifier) can finish before the next step.
-    setTimeout(() => reply(current, payload.model), current.delayMs ?? 0)
+    // `openGate` creates a file the in-process test kit watches, releasing a
+    // held catalog refresh (the scan's post-scan rebuild). `waitFor` holds the
+    // answer until that rebuild is logged. `delayMs` still holds the answer back
+    // for background work (a classifier) with no observable signal.
+    void answer(current, payload.model)
   })
+  async function answer(current, model) {
+    if (current.openGate) {
+      try { writeFileSync(current.openGate, 'open\n') } catch { /* test-only */ }
+    }
+    if (current.waitFor) await waitForFile(current.waitFor, current.waitForMarker ?? 'gate')
+    if (current.delayMs) await new Promise((r) => setTimeout(r, current.delayMs))
+    reply(current, model)
+  }
   function reply(current, model) {
     if (current.tool_calls) {
       const calls = current.tool_calls.map((c, index) => ({
