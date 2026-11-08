@@ -43,6 +43,23 @@ const work = join(root, 'work')
 mkdirSync(work, { recursive: true })
 const env = { ...process.env, DSH_HOME: home, FAKE_LLM_KEY: 'x', DSH_TELEMETRY_MODE: 'DISABLED' }
 
+// --- tiers ---------------------------------------------------------------------
+// `core` runs only the core tool-management paths (the PR gate); `full` runs
+// everything. In CI (GitHub Actions sets CI=true) the default is core; locally
+// it is full. TM_E2E_TIER overrides either.
+const tier = process.env.TM_E2E_TIER ?? (process.env.CI ? 'core' : 'full')
+const CORE = new Set(['core-main', 'core-deny', 'core-ptc', 'rules-main', 'attr-main', 'devices-main'])
+const include = (label) => tier === 'full' || CORE.has(label)
+// A profile is created only if one of its scenarios runs.
+const profileNeeds = {
+  core: ['core-main', 'core-deny', 'rescue-main'],
+  rules: ['rules-main'], preset: ['preset-main'], ptc: ['core-ptc'],
+  persist: ['persist-main', 'persist-resume'], attr: ['attr-main'],
+  'attr-rules': ['attr-rules-main'], exempt: ['exempt-main'], gate: ['gate-main'],
+  cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'],
+}
+const needProfile = (name) => profileNeeds[name].some(include)
+
 // --- profiles ------------------------------------------------------------------
 // testkit-devices resolves @deepseek-ai/dsh-tools through the testkit's links.
 if (!existsSync(join(here, 'testkit-devices', 'node_modules'))) symlinkSync('../testkit/node_modules', join(here, 'testkit-devices', 'node_modules'))
@@ -84,8 +101,8 @@ function makeProfile(name, bundles, extraPatch = '') {
 ${extraPatch}`)
 }
 
-makeProfile('core', ['dsh-tool-ultra-core'])
-makeProfile('rules', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules'], `
+if (needProfile('core')) makeProfile('core', ['dsh-tool-ultra-core'])
+if (needProfile('rules')) makeProfile('rules', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules'], `
 - id: tool-manager-classifier-rules
   name: '@lvy-jsd/dsh-tool-ultra-classifier-rules'
   config:
@@ -94,7 +111,7 @@ makeProfile('rules', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules'],
       maps: { groups: [fake] }
 `)
 
-makeProfile('preset', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules'], `
+if (needProfile('preset')) makeProfile('preset', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules'], `
 - id: tm-testkit
   name: dsh-tm-testkit
   config: { simulatePresetLayer: true }
@@ -102,19 +119,19 @@ makeProfile('preset', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules']
 
 // PTC mode. DSH 0.2.2+ selects the executor in the profile; DSH 0.2.1 reads
 // DSH_TOOLS_MODE (set by the run below) and ignores these rows.
-makeProfile('ptc', ['dsh-tool-ultra-core'], `
+if (needProfile('ptc')) makeProfile('ptc', ['dsh-tool-ultra-core'], `
 - id: tool-executor-native
   disabled: true
 - id: tool-executor-ptc
   disabled: false
 `)
 
-makeProfile('persist', ['dsh-tool-ultra-core', 'dsh-tool-ultra-persist'])
-makeProfile('attr', ['dsh-tool-ultra-core', 'dsh-tool-ultra-attribution-scan'])
+if (needProfile('persist')) makeProfile('persist', ['dsh-tool-ultra-core', 'dsh-tool-ultra-persist'])
+if (needProfile('attr')) makeProfile('attr', ['dsh-tool-ultra-core', 'dsh-tool-ultra-attribution-scan'])
 const devices = { name: 'dsh-tm-testkit-devices', dir: join(here, 'testkit-devices') }
-makeProfile('attr-rules', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules', 'dsh-tool-ultra-attribution-scan', devices])
+if (needProfile('attr-rules')) makeProfile('attr-rules', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-rules', 'dsh-tool-ultra-attribution-scan', devices])
 // The fake model's route stands in for claude-code: an exempt route is never narrowed.
-makeProfile('exempt', ['dsh-tool-ultra-core'], `
+if (needProfile('exempt')) makeProfile('exempt', ['dsh-tool-ultra-core'], `
 - id: tool-manager
   name: '@lvy-jsd/dsh-tool-ultra-core'
   config:
@@ -122,14 +139,14 @@ makeProfile('exempt', ['dsh-tool-ultra-core'], `
     exemptProviders: [fake]
 `)
 
-makeProfile('gate', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate'], `
+if (needProfile('gate')) makeProfile('gate', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate'], `
 - id: tool-manager-risk-gate
   name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
   config:
     highRisk: []
 `)
 
-makeProfile('cap', ['dsh-tool-ultra-core', 'dsh-tool-ultra-capability-bridge'], `
+if (needProfile('cap')) makeProfile('cap', ['dsh-tool-ultra-core', 'dsh-tool-ultra-capability-bridge'], `
 - id: tool-manager-capability-bridge
   name: '@lvy-jsd/dsh-tool-ultra-capability-bridge'
   config:
@@ -140,7 +157,7 @@ makeProfile('cap', ['dsh-tool-ultra-core', 'dsh-tool-ultra-capability-bridge'], 
       pair: ['mcp__fake__ping', 'phone_fake_tap']
 `)
 
-makeProfile('llm', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-llm'], `
+if (needProfile('llm')) makeProfile('llm', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-llm'], `
 - id: tool-manager-classifier-llm
   name: '@lvy-jsd/dsh-tool-ultra-classifier-llm'
   config:
@@ -148,9 +165,9 @@ makeProfile('llm', ['dsh-tool-ultra-core', 'dsh-tool-ultra-classifier-llm'], `
     cacheFile: ${join(root, 'llm-cache.json')}
 `)
 
-makeProfile('devices', ['dsh-tool-ultra-core', 'dsh-tool-ultra-devices', { name: 'dsh-tm-testkit-swiftnest', dir: join(here, 'testkit-swiftnest') }])
+if (needProfile('devices')) makeProfile('devices', ['dsh-tool-ultra-core', 'dsh-tool-ultra-devices', { name: 'dsh-tm-testkit-swiftnest', dir: join(here, 'testkit-swiftnest') }])
 
-makeProfile('packs', ['dsh-tool-ultra-core', 'dsh-tool-ultra-pack-essentials', 'dsh-tool-ultra-pack-web', 'dsh-tool-ultra-pack-mcp'], `
+if (needProfile('packs')) makeProfile('packs', ['dsh-tool-ultra-core', 'dsh-tool-ultra-pack-essentials', 'dsh-tool-ultra-pack-web', 'dsh-tool-ultra-pack-mcp'], `
 - id: tool-ultra-pack-mcp
   name: '@lvy-jsd/dsh-tool-ultra-pack-mcp'
   config:
@@ -161,6 +178,7 @@ makeProfile('packs', ['dsh-tool-ultra-core', 'dsh-tool-ultra-pack-essentials', '
 
 // --- runner --------------------------------------------------------------------
 async function run(profile, label, script, args, extraEnv = {}) {
+  const t0 = Date.now()
   const scriptPath = join(root, `${label}.script.json`)
   const logPath = join(root, `${label}.log.jsonl`)
   writeFileSync(scriptPath, JSON.stringify(script))
@@ -177,6 +195,7 @@ async function run(profile, label, script, args, extraEnv = {}) {
     const d = JSON.parse(line)
     if (d.kind === 'turn' && d.step >= 0) turns[d.step] = d
   }
+  if (process.env.TM_E2E_TIMING) console.log(`[timing] ${label}: ${Date.now() - t0}ms`)
   return turns
 }
 const fakeTools = (turn, prefix = 'mcp__fake__') => turn.tools.filter((n) => n.startsWith(prefix)).sort()
@@ -197,6 +216,7 @@ function contains(label, text, ...needles) {
 
 // --- core profile: visibility (T4, T7, T14) + no-classifier placement ----------
 const P = 'mcp__fake__ping', E = 'mcp__fake__echo', F = 'mcp__fake__fresh'
+if (include('core-main')) {
 console.log('# core profile')
 const main = await run('core', 'core-main', [
   call('tools_ls', { path: '/' }),                            // 0
@@ -242,8 +262,10 @@ contains('hook: before-load listener can veto a load', main[16].lastContent, 'Lo
 contains('no gate installed: high-risk load is refused, not silently allowed', main[17].lastContent, 'no risk gate is installed')
 // The testkit visibility filter still narrows the panel path.
 expect('toolCatalog.load (the panel path) exposes the group it loaded', fakeTools(main[18], 'phone_fake_'), ['phone_fake_tap'])
+}
 
 // --- core profile: a tool another plugin denies is marked, not offered --------
+if (include('core-deny')) {
 console.log('# deny (core profile)')
 const dn = await run('core', 'core-deny', [
   call('tools_load', { targets: ['/uncategorized/fake'] }),      // 0
@@ -258,10 +280,12 @@ contains('deny: tools_ls marks the denied tool', dn[3].lastContent, /\[denied\][
 check('deny: tools_ls leaves the callable tool unmarked', !/ping[^\n]*\[denied\]/.test(dn[3].lastContent), dn[3].lastContent)
 contains('deny: tools_load reports the denied tool as not callable', dn[5].lastContent, /Denied by another plugin[^\n]*mcp__fake__echo/)
 check('deny: tools_load does not list the denied tool as callable', !/callable from your next step:[^]*\n  mcp__fake__echo\n/.test(`${dn[5].lastContent}\n`), dn[5].lastContent)
+}
 
 // --- core profile in PTC mode: the model calls tools from run_code -----------
 // The host offers only run_code and declares the callable tools as an SDK in
 // the system prompt; that SDK comes from the same restricted view.
+if (include('core-ptc')) {
 console.log('# ptc profile')
 const code = (body) => call('run_code', { code: body, description: 'test step' })
 const pt = await run('ptc', 'core-ptc', [
@@ -275,8 +299,10 @@ expect('ptc: the SDK hides unloaded tools', pt[0].systemFake, [])
 contains('ptc: tools_ls works from inside run_code', pt[1].lastContent, 'fake/')
 expect('ptc: a load adds the group to the SDK from the next step', pt[2].systemFake, [E, P])
 contains('ptc: the loaded tool is callable from run_code', pt[3].lastContent, 'mcp__fake__ping:x')
+}
 
 // --- persist profile: T14b, loaded state survives a DSH restart ---------------
+if (include('persist-main')) {
 console.log('# persist profile')
 const ps = await run('persist', 'persist-main', [
   call('tools_load', { targets: ['/uncategorized/fake'] }),   // 0
@@ -290,8 +316,10 @@ check('persist: file records the subscribed group', savedState.groups?.includes(
 const sessionId = stateFiles[0].replace(/\.json$/, '')
 const resumed = await run('persist', 'persist-resume', [{ text: 'resumed' }], ['--session-id', decodeURIComponent(sessionId), 'continue'])
 expect('T14b resumed session: restored loads, nothing else exposed', fakeTools(resumed[0]), [E, P])
+}
 
 // --- gate profile: high-risk loads need confirmation --------------------------
+if (include('gate-main')) {
 console.log('# gate profile')
 const g = await run('gate', 'gate-main', [
   call('tools_load', { targets: ['adb_fake_two'] }),          // 0 high risk, no approval channel
@@ -301,10 +329,12 @@ const g = await run('gate', 'gate-main', [
 contains('gate: high-risk load denied with no approval channel', g[1].lastContent, /requires approval|approval/i)
 expect('gate: the denied high-risk tool stays hidden', fakeTools(g[1], 'adb_fake_'), [])
 expect('gate: ordinary tools still load without a prompt', fakeTools(g[2], 'adb_fake_'), ['adb_fake_one'])
+}
 
 // --- exempt profile: a route whose tool list cannot be refreshed ---------------
 // Claude Code gets DSH tools once at session start through the MCP bridge, so a
 // session on that route must not be narrowed at all.
+if (include('exempt-main')) {
 console.log('# exempt profile')
 const ex = await run('exempt', 'exempt-main', [
   call('mcp__fake__ping', { text: 'x' }),                      // 0 not pinned, not loaded
@@ -314,10 +344,12 @@ const ex = await run('exempt', 'exempt-main', [
 expect('exempt route: first request offers every tool, unloaded included', fakeTools(ex[0]), ['mcp__fake__echo', 'mcp__fake__ping'])
 contains('exempt route: a non-pinned tool runs directly', ex[1].lastContent, 'mcp__fake__ping:x')
 contains('exempt route: the directory is still available', ex[2].lastContent, 'uncategorized/')
+}
 
 // --- rescue profile: a direct call of a hidden tool ----------------------------
 // The real incident: a plugin's prompt tells the model to call a tool that this
 // plugin hid. It must not fail with "unknown tool".
+if (include('rescue-main')) {
 console.log('# rescue profile')
 // DSH 0.2.2+ fixes a step's callable tools when the step starts, so there the
 // rescued call is refused with "call it again" and the retry (step 1) runs it.
@@ -336,8 +368,10 @@ contains('rescue: a hidden high-risk tool gets the load instruction, not unknown
 contains('rescue: the ordinary tool stays loaded for the next call', resc[4].lastContent, 'protocol reply:again')
 check('rescue: no rescued call reports an unknown tool', [retried, resc[2].lastContent, resc[3].lastContent].every((t) => !/unknown tool/.test(t ?? '')), `${retried} | ${resc[2].lastContent} | ${resc[3].lastContent}`)
 contains('rescue: a genuinely unknown tool still reports unknown', resc[5].lastContent, 'unknown tool')
+}
 
 // --- cap profile: a capability pack loads as one target ------------------------
+if (include('cap-main')) {
 console.log('# cap profile')
 const cap = await run('cap', 'cap-main', [
   call('tools_load', { targets: ['cap:static'] }),             // 0 a pack from config
@@ -353,8 +387,10 @@ expect('cap: unload all clears the pack', fakeTools(cap[2]), [])
 expect('cap: a pack loads exactly its tools, not their group siblings', fakeTools(cap[3]), [P])
 expect('cap: the same applies to the other group in the pack', fakeTools(cap[3], 'phone_fake_'), ['phone_fake_tap'])
 contains('cap: an unknown pack is a normal miss, not a crash', cap[4].lastContent, /skipped cap:nope/)
+}
 
 // --- devices profile: the device namespace ----------------------------------
+if (include('devices-main')) {
 console.log('# devices profile')
 const dv = await run('devices', 'devices-main', [
   call('tools_ls', { path: '/device' }),                                  // 0
@@ -375,8 +411,10 @@ expect('devices: device:<slug>/<capability> loads one tool', devTools(dv[4]), ['
 expect('devices: device:all loads every device', devTools(dv[6]), ['device__laptop__screen_capture', 'device__laptop__shell_run', 'device__pixel__notify_list', 'device__pixel__screen_capture'])
 contains('devices: a device group header carries its offline note', dv[7].lastContent, /^\/device\/pixel\/ .*\[offline/m)
 contains('devices: an unknown device is a normal miss', dv[8].lastContent, /skipped device:nope/)
+}
 
 // --- packs profile: tool packs register, load by pack:<id>, and run -----------
+if (include('packs-main')) {
 console.log('# packs profile')
 const pk = await run('packs', 'packs-main', [
   call('tools_ls', { path: '/' }),                                         // 0
@@ -400,8 +438,10 @@ contains('packs: mcp_presets lists keyless and keyed presets', pk[6].lastContent
 check('packs: pack:web loads web_read and web_links', pk[7].tools.includes('web_read') && pk[7].tools.includes('web_links'), pk[7].tools.join(','))
 contains('packs: web_read refuses private addresses', pk[8].lastContent, /private address/)
 contains('packs: an unknown pack is a normal miss', pk[9].lastContent, /skipped pack:nope/)
+}
 
 // --- llm profile: small-model classification, cached --------------------------
+if (include('llm-main')) {
 console.log('# llm profile')
 const llmRun = await run('llm', 'llm-main', [
   call('tools_ls', { path: '/' }),                            // 0 classifier runs after this build
@@ -414,6 +454,7 @@ const cacheRaw = JSON.parse(readFileSync(join(root, 'llm-cache.json'), 'utf8'))
 check('llm: answers are cached per group', Object.values(cacheRaw).includes('maps'), JSON.stringify(cacheRaw))
 const classifierCalls = readFileSync(join(root, 'llm-main.log.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.classifier === true)
 check('llm: one classification request per group, not per rebuild', classifierCalls.length > 0 && classifierCalls.length <= 8, `${classifierCalls.length} classifier call(s)`)
+}
 
 // --- attr profile: group by the defining plugin package -------------------------
 // The scan starts after the first build and refreshes the catalog when it
@@ -421,6 +462,7 @@ check('llm: one classification request per group, not per rebuild', classifierCa
 // "gate" line when it runs: step 0 lists before the gate opens (prefix
 // fallback), step 1 opens the gate and waits for the post-scan rebuild before
 // listing (attribution).
+if (include('attr-main')) {
 console.log('# attr profile')
 const at = await run('attr', 'attr-main', [
   call('tools_ls', { path: '/uncategorized' }),               // 0 the scan starts after this build
@@ -433,10 +475,12 @@ check('attr: after the scan, the prefix group is gone', !/\bphone\//.test(at[2].
 contains('attr: undeclared testkit tools group under their package', at[3].lastContent, '/tm-testkit/phone_fake_tap')
 contains('attr: a declared category still applies to the attributed group', at[3].lastContent, '/code/tm-testkit/adb_fake_one')
 contains('attr: MCP tools keep the per-server group', at[3].lastContent, '/uncategorized/fake/ping')
+}
 
 // --- attr-rules profile: a renamed group keeps its category ---------------------
 // The scan renames phone/desktop/mcp groups after their package; the rules only
 // know the old names. Those tools must not fall into /uncategorized.
+if (include('attr-rules-main')) {
 console.log('# attr-rules profile')
 const ar = await run('attr-rules', 'attr-rules-main', [
   call('tools_ls', { path: '/' }),                            // 0 the scan starts after this build
@@ -448,8 +492,10 @@ contains('attr-rules: the scan renamed the group after the package', ar[2].lastC
 check('attr-rules: phone, desktop and connector tools stay out of /uncategorized', !/\/uncategorized\/tm-testkit-devices\//.test(ar[2].lastContent), ar[2].lastContent)
 contains('attr-rules: the renamed group inherits device', ar[2].lastContent, '/device/tm-testkit-devices/desktop_dev_click')
 check('attr-rules: /uncategorized lists no testkit-devices group', !/tm-testkit-devices\//.test(ar[3].lastContent), ar[3].lastContent)
+}
 
 // --- rules profile: classifier plugin, declarations, overrides, search, filter --
+if (include('rules-main')) {
 console.log('# rules profile')
 const r = await run('rules', 'rules-main', [
   call('tools_ls', { path: '/' }),                            // 0
@@ -467,8 +513,10 @@ contains('rules: declared risk marks adb_fake_two high risk', r[3].lastContent, 
 contains('search from root finds tools across directories with full paths', r[4].lastContent, '/maps/fake/ping')
 expect('group load skips declared high-risk tool', fakeTools(r[5], 'adb_fake_'), ['adb_fake_one'])
 expect('visibility filter narrows: phone_fake_swipe stays hidden', fakeTools(r[5], 'phone_fake_'), ['phone_fake_tap'])
+}
 
 // --- preset profile: tools registered only in a preset layer ------------------
+if (include('preset-main')) {
 console.log('# preset profile')
 const pr = await run('preset', 'preset-main', [
   call('tools_ls', { query: 'preset_only' }),                 // 0
@@ -478,7 +526,9 @@ const pr = await run('preset', 'preset-main', [
 expect('preset-layer tools hidden until loaded', fakeTools(pr[0], 'preset_only_'), [])
 contains('preset-layer tools are listed in the directory', pr[1].lastContent, 'preset_only_ping', 'preset_only_echo')
 expect('preset-layer tool loadable by exact name', fakeTools(pr[2], 'preset_only_'), ['preset_only_ping'])
+}
 
+console.log(`tier: ${tier}`)
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 console.log(`artifacts: ${root}`)
 process.exit(failures === 0 ? 0 : 1)
