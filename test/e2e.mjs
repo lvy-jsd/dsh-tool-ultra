@@ -279,7 +279,7 @@ expect('deny: the other plugin\'s deny wins over a load', fakeTools(dn[2]), [P])
 contains('deny: tools_ls marks the denied tool', dn[3].lastContent, /\[denied\][^\n]*mcp__fake__echo|echo[^\n]*\[denied\]/)
 check('deny: tools_ls leaves the callable tool unmarked', !/ping[^\n]*\[denied\]/.test(dn[3].lastContent), dn[3].lastContent)
 contains('deny: tools_load reports the denied tool as not callable', dn[5].lastContent, /Denied by another plugin[^\n]*mcp__fake__echo/)
-check('deny: tools_load does not list the denied tool as callable', !/callable from your next step:[^]*\n  mcp__fake__echo\n/.test(`${dn[5].lastContent}\n`), dn[5].lastContent)
+check('deny: tools_load does not list the denied tool as callable', !/callable from your next step:[^]*\n\s{2}mcp__fake__echo\n/.test(`${dn[5].lastContent}\n`), dn[5].lastContent)
 }
 
 // --- core profile in PTC mode: the model calls tools from run_code -----------

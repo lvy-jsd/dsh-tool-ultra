@@ -6,7 +6,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import mammoth from 'mammoth'
 import ExcelJS from 'exceljs'
 import { PDFDocument } from 'pdf-lib'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 
 export const name = 'tool-ultra-pack-office'

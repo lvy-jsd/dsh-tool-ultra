@@ -9,7 +9,6 @@ import {
   createTools,
   apply,
   TOOL_NAMES,
-  formatDate,
   scanArtifacts,
   sweepArtifacts,
   getDailyArtifactDir,

@@ -13,6 +13,7 @@
     "generate:ts-projects": "node scripts/generate-ts-projects.mjs",
     "build": "node scripts/generate-ts-projects.mjs && tsc -b",
     "typecheck": "node scripts/generate-ts-projects.mjs && tsc -b",
+    "lint": "eslint .",
     "test": "npm run build && node --test test/unit/*.test.mjs && node test/e2e.mjs",
     "build:sidecar": "node scripts/build-sidecar.mjs"
   },
@@ -20,6 +21,8 @@
     "@types/node": "24.19.2",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
-    "typescript": "5.9.3"
+    "eslint": "^9.39.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.72.2"
   }
 }

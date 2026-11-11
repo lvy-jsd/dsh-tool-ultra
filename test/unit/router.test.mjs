@@ -267,6 +267,7 @@ test('tools_route: re-rank failure falls back to BM25 order', async () => {
   const llm = {
     stream: async function* () {
       throw new Error('model down')
+      // eslint-disable-next-line no-unreachable -- the yield only makes this a generator
       yield { type: 'finish' }
     },
   }

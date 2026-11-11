@@ -69,7 +69,7 @@ function parseJsTs(code: string, filename: string): CodeOutlineResult {
       imports.push(specs ? `{ ${specs} } from '${source}'` : `'${source}'`)
     } else if (node.type === 'ExportNamedDeclaration') {
       if (node.declaration) {
-        addJsTsDeclaration(node.declaration, symbols, code, true)
+        addJsTsDeclaration(node.declaration, symbols, code)
         if ('id' in node.declaration && (node.declaration as any).id?.name) {
           exports.push((node.declaration as any).id.name)
         } else if (node.declaration.type === 'VariableDeclaration') {
@@ -89,10 +89,10 @@ function parseJsTs(code: string, filename: string): CodeOutlineResult {
       const name = 'id' in decl && decl.id ? (decl.id as any).name : 'default'
       exports.push(`default: ${name}`)
       if ('type' in decl) {
-        addJsTsDeclaration(decl as any, symbols, code, true)
+        addJsTsDeclaration(decl as any, symbols, code)
       }
     } else {
-      addJsTsDeclaration(node, symbols, code, false)
+      addJsTsDeclaration(node, symbols, code)
     }
   }
 
@@ -105,7 +105,7 @@ function parseJsTs(code: string, filename: string): CodeOutlineResult {
   }
 }
 
-function addJsTsDeclaration(decl: any, list: SymbolItem[], code: string, isExport = false) {
+function addJsTsDeclaration(decl: any, list: SymbolItem[], code: string) {
   const line = decl.loc?.start.line ?? 0
 
   if (decl.type === 'FunctionDeclaration' && decl.id) {

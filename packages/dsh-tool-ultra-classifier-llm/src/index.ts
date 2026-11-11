@@ -373,7 +373,7 @@ export function createSearchFallback({
   maxCandidates = 120,
 }: RetrievalOptions = {}): SearchFallback {
   const limit = cache.size > 50 ? 50 : cache.size
-  return async function fallback(query: string, hits: FoundTool[]): Promise<FoundTool[] | undefined> {
+  return async function fallback(query: string, _hits: FoundTool[]): Promise<FoundTool[] | undefined> {
     if (typeof pickTools !== 'function' || typeof candidates !== 'function') return undefined
     const key = query.trim().toLowerCase()
     if (!key) return undefined

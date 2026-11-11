@@ -77,7 +77,7 @@ createServer(async (req, res) => {
   res.end()
   if (entry) {
     if (!usage && tail.trim().startsWith('{')) {
-      try { usage = JSON.parse(tail).usage ?? null } catch {}
+      try { usage = JSON.parse(tail).usage ?? null } catch { /* no usage in this tail */ }
     }
     appendFileSync(logPath, JSON.stringify({ ...entry, status: upstreamRes.status, finish, usage }) + '\n')
   }

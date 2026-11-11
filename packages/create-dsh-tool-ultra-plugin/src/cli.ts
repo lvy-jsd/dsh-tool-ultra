@@ -42,7 +42,6 @@ export interface ScaffoldResult {
 const YEAR = new Date().getFullYear()
 
 const kebab = (value: unknown): string => String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-const camel = (value: unknown): string => kebab(value).replace(/-([a-z0-9])/g, (_: string, c: string) => c.toUpperCase())
 
 const PACKAGE_JSON = (name: string, type: string): string => `${JSON.stringify({
   name,

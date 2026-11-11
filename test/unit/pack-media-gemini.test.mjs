@@ -402,7 +402,7 @@ test('media engines: structured segments produce speakers, tone, fractional time
 test('media engines: invalid structured segments fall back locally without leaking response text', async (t) => {
   const invalid = [
     'not JSON', '```json\n' + TRANSCRIPT + '\n```', '{}', '{"segments":{}}',
-    ...[null, { start: '0' }, { start: -1 }, { end: 0 }, { end: 1e400 },
+    ...[null, { start: '0' }, { start: -1 }, { end: 0 }, { end: Infinity },
       { speaker: 0 }, { speaker: 1.5 }, { speaker: 'Alice' }, { text: '' }, { text: 3 }, { tone: 3 },
     ].map((overrides) => JSON.stringify({ segments: [overrides === null ? null : { ...SEGMENTS[0], text: KEY, ...overrides }] })),
   ]
