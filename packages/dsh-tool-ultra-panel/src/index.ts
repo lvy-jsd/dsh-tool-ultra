@@ -268,7 +268,7 @@ export function createApi(catalog: ToolCatalogService, tidy: TidyRuntime = {}) {
     /** Live agents with loaded state and real token usage. */
     sessions() {
       const rows = []
-      for (const { agent, id, parentId } of catalog.agents()) {
+      for (const { agent, id, parentId, title } of catalog.agents()) {
         const state = catalog.stateOf(agent)
         const counts = catalog.toolCounts(agent)
         // An exempt route is never narrowed, so it has no allowlist to count.
@@ -277,6 +277,7 @@ export function createApi(catalog: ToolCatalogService, tidy: TidyRuntime = {}) {
         rows.push({
           id,
           parentId,
+          title,
           exempt,
           exemptSource: exemption.source,
           visible: exempt ? null : (catalog.allowFor(agent) ?? []).length,
