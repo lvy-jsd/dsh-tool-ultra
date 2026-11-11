@@ -64,6 +64,8 @@ interface ClientContext {
     interface SessionRow {
       id: string
       parentId: string | null
+      /** Session title; a Bot's name when ds-bot set it. */
+      title?: string
       exempt: boolean
       /** 'file:provider' | 'file:session' | 'config:provider' | '' */
       exemptSource?: string
@@ -732,7 +734,7 @@ interface ClientContext {
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } }, sessions.map((s) =>
         h('div', { key: s.id, className: 'tmp-card' },
           h('div', { className: 'tmp-bar' },
-            h('span', { className: 'tmp-name' }, s.id.replace(/^session-/, '').slice(0, 8)),
+            h('span', { className: 'tmp-name', title: s.title ?? s.id }, s.title ?? s.id.replace(/^session-/, '').slice(0, 8)),
             s.parentId ? h(Chip, null, format(t, 'subagentOf', { id: s.parentId.replace(/^session-/, '').slice(0, 8) })) : null,
             s.exempt
               ? h(Chip, { tone: 'warn', title: `exempt · ${s.exemptSource === 'file:session' ? t('exemptSessionHint') : t('exemptHint')}` }, t('exempt'))
@@ -1158,7 +1160,7 @@ interface ClientContext {
         audit?.length === 0 ? h('p', { className: 'tmp-intro' }, t('overview.firstRun')) : null,
         sessions?.length ? h('label', { className: 'tmp-bar' }, t('overview.session'),
           h('select', { className: 'tmp-input', value: selected ?? '', onChange: (e: import('react').ChangeEvent<HTMLSelectElement>) => setSelected(e.target.value) },
-            ...sessions.map((s) => h('option', { key: s.id, value: s.id }, s.id)))) : null,
+            ...sessions.map((s) => h('option', { key: s.id, value: s.id }, s.title ?? s.id)))) : null,
         sessions?.length === 0 ? h('p', { className: 'tmp-muted' }, t('noSessions')) : null,
         h('div', { className: 'tmp-metrics' },
           metric('visible', session?.visibleNow, session && Number.isFinite(session.installed) ? format(t, 'overview.installed', { n: session.installed }) : t('unavailable')),

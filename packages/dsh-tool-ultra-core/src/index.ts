@@ -509,9 +509,13 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     agents: () => {
       // The parent lookup goes through the injected agents API: the plugin ctx
       // itself does not inject `agents`, and reading it there throws.
+      // The session title (a Bot's name, set by ds-bot) is read through the
+      // session-title service so the panel can label each session.
+      const titles = ctx.get?.('sessionTitle') as { get?(session: unknown): { title?: string } | undefined } | undefined
       return visibility.agents().map((agent) => {
         const parent = visibility.parentOf(agent)
-        return { agent, id: String(agent.id), parentId: parent ? String(parent.id) : null }
+        const title = agent.session ? titles?.get?.(agent.session)?.title : undefined
+        return { agent, id: String(agent.id), parentId: parent ? String(parent.id) : null, title }
       })
     },
     /** Effective configuration, for UI display and editing. */
