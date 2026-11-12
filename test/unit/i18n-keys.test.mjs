@@ -78,6 +78,7 @@ test('risk-gate: the high-risk prompt has matching en and zh-CN keys', async () 
       annotate: () => {},
       resolve: (raw) => ({ kind: 'tool', tool: { name: String(raw) } }),
       get: () => ({ tools: new Map([['merge_pull_request', { name: 'merge_pull_request', highRisk: true }]]) }),
+      toolPacks: () => [{ id: 'github', title: 'GitHub', tools: ['merge_pull_request'] }],
     },
     on: (event, handler) => { listeners.set(event, handler); return () => listeners.delete(event) },
     effect: (fn) => fn(),
@@ -95,4 +96,13 @@ test('risk-gate: the high-risk prompt has matching en and zh-CN keys', async () 
   assert.deepEqual(Object.keys(result.displayReason).sort(), ['en', 'zh-CN'])
   assert.ok(typeof result.displayReason.en === 'string' && result.displayReason.en.length > 0, 'risk-gate: empty en prompt')
   assert.ok(typeof result.displayReason['zh-CN'] === 'string' && result.displayReason['zh-CN'].length > 0, 'risk-gate: empty zh-CN prompt')
+  // The prompt must name the tool, its pack, why it is high risk, and what
+  // approving does — in both languages.
+  for (const [lang, needles] of [
+    ['en', ['merge_pull_request', 'GitHub', 'hard to undo', 'loads them into this session']],
+    ['zh-CN', ['merge_pull_request', 'GitHub', '难以撤销', '加载到当前会话']],
+  ]) {
+    const prompt = result.displayReason[lang]
+    for (const needle of needles) assert.ok(prompt.includes(needle), `risk-gate: ${lang} prompt missing "${needle}"`)
+  }
 })

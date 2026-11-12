@@ -85,6 +85,20 @@ export function apply(ctx: ExtensionContext, config: RiskGateConfig = {}) {
     return risky
   }
 
+  /** The pack a tool belongs to (its title), or undefined when it is in none. */
+  function packOf(toolName: string): string | undefined {
+    if (typeof ctx.toolCatalog.toolPacks !== 'function') return undefined
+    return ctx.toolCatalog.toolPacks().find((pack) => pack.tools.includes(toolName))?.title
+  }
+
+  /** Tool names for the prompt, each with its pack when one is registered. */
+  function labeled(names: string[]): string {
+    return names.map((toolName) => {
+      const pack = packOf(toolName)
+      return pack ? `${toolName} (pack: ${pack})` : toolName
+    }).join(', ')
+  }
+
   /** Tools a tools_load call would add, resolved against the caller's catalog. */
   function targetsOf(agent: Agent | undefined, args: PreExecute['arguments']): string[] {
     const names = new Set<string>()
@@ -121,12 +135,13 @@ export function apply(ctx: ExtensionContext, config: RiskGateConfig = {}) {
     // A per-session allowlist entry naming these tools skips the prompt.
     if (risky.every((toolName) => preApproved.includes(toolName) || preApproved.includes(shortOf(toolName)))) return next()
     logger.info?.(`tool-manager-risk-gate: confirming load of ${risky.join(', ')}`)
+    const list = labeled(risky)
     return {
       kind: 'ask',
-      reason: `Loading high-risk tool(s): ${risky.join(', ')}`,
+      reason: `Loading high-risk tool(s): ${list}`,
       displayReason: {
-        en: `Load high-risk tool(s)? ${risky.join(', ')}`,
-        'zh-CN': `加载高危工具？${risky.join(', ')}`,
+        en: `Load high-risk tool(s)? ${list}\nWhy: these tools are marked high-risk because they make changes that are hard to undo.\nApproving loads them into this session so the model can call them; nothing runs until the model calls one.`,
+        'zh-CN': `加载高危工具？${list}\n原因：这些工具被标记为高危，因为它们会做出难以撤销的更改。\n批准后，这些工具会被加载到当前会话，模型可以调用它们；在模型调用之前不会执行任何操作。`,
       },
     }
   }), 'tool-manager-risk-gate.pre-execute()')
