@@ -909,10 +909,20 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     const paused = pausedRefusal(agent, targets)
     if (paused) return paused
     const cat = getCatalog(agent)
-    const nodes = targets.map((raw) => ({ raw, node: resolveCatalogTarget(cat, raw, agent) }))
+    // Report each target once: deduplicate on the trimmed name, keeping first
+    // order, so a repeated name is resolved, loaded and reported a single time.
+    const seen = new Set<string>()
+    const nodes: { raw: string, node: CatalogNode }[] = []
+    for (const raw of targets) {
+      const key = String(raw).trim()
+      if (seen.has(key)) continue
+      seen.add(key)
+      nodes.push({ raw: key, node: resolveCatalogTarget(cat, key, agent) })
+    }
+    const uniqueTargets = nodes.map(({ raw }) => raw)
     const names = nodes.flatMap(({ node }) => (node.kind === 'root' || node.kind === 'missing' ? [] : toolsUnder(cat, node).map((t) => t.name)))
     try {
-      await ctx.serial('tool-catalog/before-load', { agent, targets, names })
+      await ctx.serial('tool-catalog/before-load', { agent, targets: uniqueTargets, names })
     } catch (error) {
       return `Load refused: ${errorText(error)}`
     }
@@ -921,11 +931,8 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     const before = new Set(visibility.allowFor(agent) ?? [])
     const notes: string[] = []
     visibility.update(agent, (state) => {
-      for (const { raw, node } of nodes) {
-        if (node.kind === 'missing' || node.kind === 'root') {
-          notes.push(`skipped ${raw}: ${node.kind === 'root' ? 'cannot load the whole tree' : `not found (try tools_ls with query)${didYouMean(cat, raw)}`}`)
-          continue
-        }
+      for (const { node } of nodes) {
+        if (node.kind === 'missing' || node.kind === 'root') continue
         // An alias (e.g. a capability pack) names exact tools: add those, never
         // the whole group they happen to live in.
         if (node.kind === 'category' && node.category.aliasTools) {
@@ -949,10 +956,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
           if (risky.length) notes.push(`${group.name}: high-risk tools not included (${risky.join(', ')}); load them one by one`)
         }
         if (node.kind === 'tool') {
-          if (node.tool.highRisk && riskGates.size === 0) {
-            notes.push(`${node.tool.name} is high risk and no risk gate is installed to confirm it; not loaded`)
-            continue
-          }
+          if (node.tool.highRisk && riskGates.size === 0) continue
           state.loaded.add(node.tool.name)
           state.excluded.delete(node.tool.name)
           if (forSubagents) state.handoffTools.add(node.tool.name)
@@ -961,17 +965,28 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     })
     const after = visibility.allowFor(agent) ?? []
     const added = after.filter((n) => !before.has(n))
-    recordAudit({ kind: 'load', agentId: String(agent.id), summary: targets.join(', '), ok: true })
-    ctx.emit('tool-catalog/after-load', { agent, targets, added })
+    recordAudit({ kind: 'load', agentId: String(agent.id), summary: uniqueTargets.join(', '), ok: true })
+    ctx.emit('tool-catalog/after-load', { agent, targets: uniqueTargets, added })
     const denied = deniedFor(agent)
     const blocked = added.filter((n) => denied.has(n))
     const callable = added.filter((n) => !denied.has(n))
     if (blocked.length) warnDenied(blocked)
     const tokens = callable.reduce((sum, n) => sum + (cat.tools.get(n)?.tokens ?? 0), 0)
+    // One line per target, so a mixed batch reports each target (loaded /
+    // already loaded / not found / refused) instead of failing the whole call.
+    const addedSet = new Set(added)
+    const perTarget = nodes.map(({ raw, node }) => {
+      if (node.kind === 'missing') return `skipped ${raw}: not found (try tools_ls with query)${didYouMean(cat, raw)}`
+      if (node.kind === 'root') return `skipped ${raw}: cannot load the whole tree`
+      if (node.kind === 'tool' && node.tool.highRisk && riskGates.size === 0 && !before.has(node.tool.name)) return `refused: ${raw} (high risk, no risk gate is installed to confirm it)`
+      const newTools = toolsUnder(cat, node).filter((t) => addedSet.has(t.name))
+      return newTools.length ? `loaded: ${raw}` : `already loaded: ${raw}`
+    })
     return [
       callable.length ? `Loaded ${callable.length} tool(s), ${fmtTokens(tokens)}; callable from your next step:` : 'Nothing new loaded.',
       ...callable.map((n) => `  ${n}`),
       ...(blocked.length ? [`Denied by another plugin (e.g. an MCP connector rule), not callable even when loaded: ${blocked.join(', ')}`] : []),
+      ...perTarget,
       ...notes,
     ].join('\n')
   }
@@ -1063,7 +1078,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   ctx.tools.register(defineTool({
     name: 'tools_load',
     description:
-      'Make tools callable for the rest of this session. Each target is a group path ("/code/github"), a category ("/maps"), one tool by path or exact name ("mcp__github__get_file_contents"), or a whole tool pack ("pack:web"). Bare names try pack: → cap: → device:, first match only. Loading a group also includes tools the group gains later. Prefer one group load over many single tools. Loaded tools are available from your next step. Set forSubagents to also hand these targets to subagents you start afterwards.',
+      'Make tools callable for the rest of this session. Each target is a group path ("/code/github"), a category ("/maps"), one tool by path or exact name ("mcp__github__get_file_contents"), or a whole tool pack ("pack:web"). Bare names try pack: → cap: → device:, first match only. Loading a group also includes tools the group gains later. Prefer one group load over many single tools. Loaded tools are available from your next step. Set forSubagents to also hand these targets to subagents you start afterwards. Every target is reported individually (loaded, already loaded, not found, or refused with the reason), so one bad name does not fail the rest of the batch.',
     parameters: {
       targets: { type: 'array', items: { type: 'string' }, required: true, description: 'Paths, group names or exact tool names.' },
       forSubagents: { type: 'boolean', description: 'Also give these targets to subagents started from now on.' },
