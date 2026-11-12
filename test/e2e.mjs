@@ -23,6 +23,9 @@
 //           device:current / device:<slug> / device:all, [offline] notes
 //   packs   core + the essentials, web and mcp packs: pack:<id> loads a pack,
 //           pack tools run, mcp_presets reports keyless/keyed presets
+//   control core + risk-gate + the control pack with a fake ssh client: read-only
+//           tools run, a read-only ssh_run runs, any other call is refused for want
+//           of an approval channel and never reaches the client
 //
 // Usage: node test/e2e.mjs [path/to/dsh]   (default: ~/.local/bin/dsh)
 import { spawn, spawnSync } from 'node:child_process'
@@ -48,7 +51,7 @@ const env = { ...process.env, DSH_HOME: home, FAKE_LLM_KEY: 'x', DSH_TELEMETRY_M
 // everything. In CI (GitHub Actions sets CI=true) the default is core; locally
 // it is full. TM_E2E_TIER overrides either.
 const tier = process.env.TM_E2E_TIER ?? (process.env.CI ? 'core' : 'full')
-const CORE = new Set(['core-main', 'core-deny', 'core-ptc', 'rules-main', 'attr-main', 'devices-main'])
+const CORE = new Set(['core-main', 'core-deny', 'core-ptc', 'rules-main', 'attr-main', 'devices-main', 'control-main'])
 const include = (label) => tier === 'full' || CORE.has(label)
 // A profile is created only if one of its scenarios runs.
 const profileNeeds = {
@@ -56,7 +59,7 @@ const profileNeeds = {
   rules: ['rules-main'], preset: ['preset-main'], ptc: ['core-ptc'],
   persist: ['persist-main', 'persist-resume'], attr: ['attr-main'],
   'attr-rules': ['attr-rules-main'], exempt: ['exempt-main'], gate: ['gate-main'],
-  cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'],
+  cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'], control: ['control-main'],
 }
 const needProfile = (name) => profileNeeds[name].some(include)
 
@@ -175,6 +178,30 @@ if (needProfile('packs')) makeProfile('packs', ['dsh-tool-ultra-core', 'dsh-tool
     defaults: false
 `)
 
+
+// The control pack runs a fake `ssh`: a script that records its last argument (the
+// remote command) and prints a marker. A call that reaches it shows up in the log.
+const fakeSsh = join(root, 'fake-ssh.sh')
+const fakeSshLog = join(root, 'fake-ssh.log')
+if (needProfile('control')) {
+  writeFileSync(fakeSsh, `#!/bin/sh\nfor last; do :; done\necho "$last" >> ${fakeSshLog}\necho FAKE-SSH-OUTPUT\n`, { mode: 0o755 })
+  makeProfile('control', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
+# Loads pass without a question, so only the call-time gate is under test.
+- id: tool-manager-risk-gate
+  name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
+  config:
+    allow: { '*': true }
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs: { ssh: true, ssh-exec: true }
+    sshBin: ${fakeSsh}
+    multiplex: false
+    auditFile: ${join(root, 'control-audit.jsonl')}
+    hosts:
+      t: { target: 'root@fake.invalid' }
+`)
+}
 
 // --- runner --------------------------------------------------------------------
 async function run(profile, label, script, args, extraEnv = {}) {
@@ -438,6 +465,33 @@ contains('packs: mcp_presets lists keyless and keyed presets', pk[6].lastContent
 check('packs: pack:web loads web_read and web_links', pk[7].tools.includes('web_read') && pk[7].tools.includes('web_links'), pk[7].tools.join(','))
 contains('packs: web_read refuses private addresses', pk[8].lastContent, /private address/)
 contains('packs: an unknown pack is a normal miss', pk[9].lastContent, /skipped pack:nope/)
+}
+
+// --- control profile: ssh tools run, risky calls are refused without an approver -
+if (include('control-main')) {
+console.log('# control profile')
+const ct = await run('control', 'control-main', [
+  call('tools_ls', { path: '/' }),                                                 // 0
+  call('tools_load', { targets: ['pack:ssh'] }),                                   // 1
+  call('ssh_read', { host: 't', path: '/etc/hostname' }),                          // 2
+  call('tools_load', { targets: ['pack:ssh-exec'] }),                              // 3
+  call('ssh_run', { host: 't', cmd: 'uptime' }),                                   // 4 read-only: no question
+  call('ssh_run', { host: 't', cmd: 'rm -rf /srv/data' }),                         // 5 asks, nobody to answer
+  call('ssh_write', { host: 't', path: '/etc/motd', content: 'hi' }),              // 6 asks, nobody to answer
+  call('ssh_read', { host: 'evil', path: '/etc/hostname' }),                       // 7 not a configured alias
+  { text: 'done' },                                                                // 8
+], ['control'])
+const SSH_READ = ['ssh_hosts', 'ssh_log', 'ssh_read', 'ssh_sys'], SSH_EXEC = ['ssh_get', 'ssh_put', 'ssh_run', 'ssh_write']
+check('control: ssh tools start hidden', !ct[0].tools.some((n) => n.startsWith('ssh_')), ct[0].tools.join(','))
+expect('control: pack:ssh loads the read-only tools only', ct[2].tools.filter((n) => n.startsWith('ssh_')).sort(), SSH_READ)
+contains('control: ssh_read goes through the ssh client', ct[3].lastContent, 'FAKE-SSH-OUTPUT')
+expect('control: pack:ssh-exec adds the changing tools', ct[4].tools.filter((n) => n.startsWith('ssh_')).sort(), [...SSH_READ, ...SSH_EXEC])
+contains('control: a read-only ssh_run runs without a question', ct[5].lastContent, /^exit 0/, 'FAKE-SSH-OUTPUT')
+check('control: ssh_run of a changing command is refused', /approval/i.test(ct[6].lastContent) && !ct[6].lastContent.includes('FAKE-SSH-OUTPUT'), ct[6].lastContent)
+check('control: ssh_write is refused', /approval/i.test(ct[7].lastContent) && !ct[7].lastContent.includes('FAKE-SSH-OUTPUT'), ct[7].lastContent)
+contains('control: an unknown host alias is an error, not a login attempt', ct[8].lastContent, 'Unknown host "evil"')
+const sshSeen = existsSync(fakeSshLog) ? readFileSync(fakeSshLog, 'utf8').trim().split('\n') : []
+check('control: only the two permitted calls reached the ssh client', sshSeen.length === 2 && sshSeen[1].includes('uptime') && !sshSeen.some((l) => /rm -rf|motd/.test(l)), sshSeen.join(' | '))
 }
 
 // --- llm profile: small-model classification, cached --------------------------
