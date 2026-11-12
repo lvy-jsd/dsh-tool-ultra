@@ -9,7 +9,7 @@
 // are provided by other plugins through the `toolCatalog` service.
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { buildCatalog, resolveTarget, toolsUnder, estimateTokens, UNCATEGORIZED } from './catalog.js'
+import { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, UNCATEGORIZED } from './catalog.js'
 import { createMetadataStore, defaultMetadataFile } from './metadata.js'
 import { createExemptStore, defaultExemptFile } from './exempt.js'
 import { defaultManifestFile, syncManifest } from './manifest.js'
@@ -21,7 +21,7 @@ import { Bm25 } from './router/bm25.js'
 import type { Agent, AuditEntry, LoadRefusal, Annotation, Catalog, CatalogNode, CoreConfig, Disposer, FoundTool, HostContext, Logger, RiskGate, SearchFallback, SerializedState, ToolCatalogService, ToolEntry, ToolMeta, ToolPack, ToolPackItem, ToolSchema, GroupNote, Group, PendingCall } from './types.js'
 
 export type * from './types.js'
-export { buildCatalog, resolveTarget, toolsUnder, estimateTokens, summary, shortName, structuralGroup, DEFAULT_CATEGORIES, UNCATEGORIZED, MISC_GROUP, OVERRIDE_PRIORITY } from './catalog.js'
+export { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, summary, shortName, structuralGroup, DEFAULT_CATEGORIES, UNCATEGORIZED, MISC_GROUP, OVERRIDE_PRIORITY } from './catalog.js'
 export type { BuildOptions } from './catalog.js'
 export type { RegisteredClassifier, RegisteredFilter } from './service.js'
 export type { VisibilityController, VisibilityOptions } from './visibility.js'
@@ -836,9 +836,19 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     return rankedTools(cat, node, query)
   }
 
+  /** A "did you mean" suffix for a target the catalog does not know. */
+  function didYouMean(cat: Catalog, target: string): string {
+    const suggestions = closestNames(cat, target)
+    return suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''
+  }
+
   /** The model-facing text for a set of hits. */
-  function formatSearch(query: string, hits: ToolEntry[], visible: Set<string> | null, denied: Set<string> = new Set()): string {
-    if (!hits.length) return `No tools match "${query}".`
+  function formatSearch(query: string, hits: ToolEntry[], visible: Set<string> | null, denied: Set<string> = new Set(), cat?: Catalog): string {
+    if (!hits.length) {
+      // A single-word query that names no tool may be a misspelling of one.
+      const words = query.trim().split(/\s+/).filter(Boolean)
+      return `No tools match "${query}".${words.length === 1 && cat ? didYouMean(cat, words[0]!) : ''}`
+    }
     const shown = hits.slice(0, 40)
     return [`${hits.length} match(es) for "${query}" (load by path or full name):`, ...shown.map((t) => toolLine(t, visible, denied, true)), hits.length > shown.length ? `  … ${hits.length - shown.length} more; narrow the query or the path` : ''].filter(Boolean).join('\n')
   }
@@ -895,7 +905,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     visibility.update(agent, (state) => {
       for (const { raw, node } of nodes) {
         if (node.kind === 'missing' || node.kind === 'root') {
-          notes.push(`skipped ${raw}: ${node.kind === 'root' ? 'cannot load the whole tree' : 'not found (try tools_ls with query)'}`)
+          notes.push(`skipped ${raw}: ${node.kind === 'root' ? 'cannot load the whole tree' : `not found (try tools_ls with query)${didYouMean(cat, raw)}`}`)
           continue
         }
         // An alias (e.g. a capability pack) names exact tools: add those, never
@@ -1006,7 +1016,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     async execute(args, exec) {
       const cat = getCatalog(exec?.agent as Agent | undefined)
       const node = resolveCatalogTarget(cat, args.path ?? '/', exec?.agent as Agent | undefined)
-      if (node.kind === 'missing') return `No such path: ${node.target}. Start from tools_ls("/") or search with tools_ls({query}).`
+      if (node.kind === 'missing') return `No such path: ${node.target}. Start from tools_ls("/") or search with tools_ls({query}).${didYouMean(cat, node.target)}`
       const agent = exec?.agent as Agent | undefined
       const visible = visibleSetFor(agent)
       const denied = deniedFor(agent)
@@ -1026,7 +1036,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
           known.add(tool.name)
         }
       }
-      return formatSearch(args.query, hits, visible, denied)
+      return formatSearch(args.query, hits, visible, denied, cat)
     },
   }))
 
