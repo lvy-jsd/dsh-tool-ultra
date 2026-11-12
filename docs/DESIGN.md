@@ -327,6 +327,8 @@ Updated phase 2 order (user, 2026-10-15): ① production-copy trial + T12 cache 
 
 Read from every package the host loader knows (`ctx.loader.entries()`). Exact-name entries beat `match`; runtime `annotate()` beats `package.json`; user overrides beat both. Self-declaration is the most accurate source and also answers "which plugin owns this tool" without scanning.
 
+A third-party plugin may also declare its tools on the tool schema itself, with an optional `toolUltra` field: `{ category: "/memory", risk: "low" | "medium" | "high", pinned?: boolean }`. The catalog prefers it over the classification logic (it is read as an annotation, between `annotate()` and the panel edits); user settings (`metadata.json`, `settings.json`) still win over it. `risk: "high"` feeds the existing risk-gate input (`highRisk`); `pinned: true` keeps the tool always-on and out of the directory unless the user unpins it. Invalid values are ignored with a log warning.
+
 ### 11.5 Hooks (implemented, plain Cordis events)
 
 | Event | Kind | Payload |

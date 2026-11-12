@@ -9,7 +9,7 @@
 // are provided by other plugins through the `toolCatalog` service.
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, UNCATEGORIZED } from './catalog.js'
+import { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, pickToolUltra, UNCATEGORIZED } from './catalog.js'
 import { createMetadataStore, defaultMetadataFile } from './metadata.js'
 import { createExemptStore, defaultExemptFile } from './exempt.js'
 import { defaultManifestFile, syncManifest } from './manifest.js'
@@ -18,10 +18,10 @@ import { createVisibilityController } from './visibility.js'
 import { createRegistries, readManifestAnnotations, listPluginPackages } from './service.js'
 import { registerRouter } from './router/index.js'
 import { Bm25 } from './router/bm25.js'
-import type { Agent, AuditEntry, LoadRefusal, Annotation, Catalog, CatalogNode, CoreConfig, Disposer, FoundTool, HostContext, Logger, RiskGate, SearchFallback, SerializedState, ToolCatalogService, ToolEntry, ToolMeta, ToolPack, ToolPackItem, ToolSchema, GroupNote, Group, PendingCall } from './types.js'
+import type { Agent, AuditEntry, LoadRefusal, Annotation, Catalog, CatalogNode, CoreConfig, Disposer, FoundTool, HostContext, Logger, RiskGate, SearchFallback, SerializedState, ToolCatalogService, ToolEntry, ToolMeta, ToolPack, ToolPackItem, ToolSchema, ToolUltraMeta, GroupNote, Group, PendingCall } from './types.js'
 
 export type * from './types.js'
-export { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, summary, shortName, structuralGroup, DEFAULT_CATEGORIES, UNCATEGORIZED, MISC_GROUP, OVERRIDE_PRIORITY } from './catalog.js'
+export { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, pickToolUltra, RISK_LEVELS, summary, shortName, structuralGroup, DEFAULT_CATEGORIES, UNCATEGORIZED, MISC_GROUP, OVERRIDE_PRIORITY } from './catalog.js'
 export type { BuildOptions } from './catalog.js'
 export type { RegisteredClassifier, RegisteredFilter } from './service.js'
 export type { VisibilityController, VisibilityOptions } from './visibility.js'
@@ -208,11 +208,32 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     }
   }
 
+  // A tool's own toolUltra declaration (see pickToolUltra). A bad value is
+  // warned about once per tool, not on every rebuild: the catalog is rebuilt
+  // often, and the log is for the operator.
+  const warnedToolUltra = new Set<string>()
+  function declaredMeta(schema: ToolSchema): ToolUltraMeta {
+    if (schema.toolUltra === undefined) return {}
+    const once = warnedToolUltra.has(schema.name) ? undefined : {
+      warn: (message: string) => { warnedToolUltra.add(schema.name); logger.warn?.(message) },
+    }
+    return pickToolUltra(schema.toolUltra, schema.name, once)
+  }
+
   const pinnedSet = () => {
     const current = settings.effective()
     const set = new Set([...DEFAULT_PINNED, ...current.pinned])
     for (const n of current.unpin) set.delete(n)
     for (const n of ENTRY_TOOLS) set.add(n)
+    // A tool's own toolUltra.pinned declaration applies only when the user has
+    // not set the tool explicitly: settings win over declarations.
+    for (const schema of ctx.tools.schemas()) {
+      const declared = declaredMeta(schema)
+      if (declared.pinned === undefined) continue
+      if (current.pinned.includes(schema.name) || current.unpin.includes(schema.name)) continue
+      if (declared.pinned) set.add(schema.name)
+      else set.delete(schema.name)
+    }
     return set
   }
 
@@ -267,7 +288,8 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
 
   /**
    * The declared metadata only: package.json first, runtime annotate() after,
-   * with panel edits left out so the UI can tell the two apart.
+   * then the tool's own toolUltra declaration, with panel edits left out so
+   * the UI can tell the two apart.
    */
   function annotationForLayers(name: string): ToolMeta {
     manifestAnnotations ??= readManifestAnnotations(ctx, logger)
@@ -276,6 +298,8 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
       const hit = typeof annotation.match === 'string' ? annotation.match === name : annotation.match.test(name)
       if (hit) Object.assign(merged, annotation.meta)
     }
+    const schema = ctx.tools.schemas().find((s) => s.name === name)
+    if (schema) Object.assign(merged, declaredMeta(schema))
     return merged
   }
 
@@ -359,11 +383,17 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     if (cached) return cached
     ctx.emit('tool-catalog/before-rebuild', {})
     manifestAnnotations ??= readManifestAnnotations(ctx, logger)
+    // A tool's own toolUltra declaration: after the package and runtime
+    // annotations, so it beats them, and before the panel edits, so the
+    // user's edits beat it.
+    const declared = schemas.map((s) => ({ source: 'toolUltra', match: s.name, meta: declaredMeta(s) }))
+      .filter((a) => Object.keys(a.meta).length > 0)
     const catalog = buildCatalog(schemas, {
       classifiers: [...registries.classifiers],
       // Package declarations first, runtime annotate() after, so runtime wins —
-      // and panel edits last of all, so they win over both.
-      annotations: [...manifestAnnotations, ...registries.annotations, ...metadata.annotations()],
+      // then the tool's own toolUltra declaration, and panel edits last of all,
+      // so they win over everything.
+      annotations: [...manifestAnnotations, ...registries.annotations, ...declared, ...metadata.annotations()],
       categories: Object.fromEntries(registries.categories),
       highRisk: settings.effective().highRisk,
     })

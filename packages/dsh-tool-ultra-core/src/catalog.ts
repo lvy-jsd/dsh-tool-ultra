@@ -9,7 +9,7 @@
 // Grouping never decides visibility; a misplaced tool is only listed in the
 // wrong place, never lost.
 
-import type { Agent, Annotation, Catalog, CatalogNode, Category, Classifier, Group, GroupProbe, RegisteredResolver, ToolEntry, ToolMeta, ToolProbe, ToolSchema } from './types.js'
+import type { Agent, Annotation, Catalog, CatalogNode, Category, Classifier, Group, GroupProbe, Logger, RegisteredResolver, RiskLevel, ToolEntry, ToolMeta, ToolProbe, ToolSchema, ToolUltraMeta } from './types.js'
 
 export const UNCATEGORIZED = 'uncategorized'
 export const MISC_GROUP = 'misc'
@@ -76,6 +76,42 @@ export function estimateTokens(schema: unknown): number {
   let wide = 0
   for (const ch of text) if ((ch.codePointAt(0) ?? 0) > 0x2e7f) wide += 1
   return Math.ceil((text.length - wide) / 4 + wide)
+}
+
+/** Risk levels a toolUltra declaration may use. */
+export const RISK_LEVELS = ['low', 'medium', 'high'] as const
+
+/**
+ * Validate a tool schema's `toolUltra` self-declaration. Invalid values are
+ * dropped, not coerced, and reported through the logger when one is given:
+ * a bad declaration must not break the catalog.
+ */
+export function pickToolUltra(raw: unknown, name: string, logger?: Logger): ToolUltraMeta {
+  const out: ToolUltraMeta = {}
+  if (raw === undefined || raw === null) return out
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    logger?.warn?.(`tool-manager: ignoring toolUltra on ${name}: expected an object`)
+    return out
+  }
+  const { category, risk, pinned } = raw as Record<string, unknown>
+  if (category !== undefined) {
+    if (typeof category === 'string') {
+      const value = category.replace(/^\/+/, '').trim()
+      if (value) out.category = value
+      else logger?.warn?.(`tool-manager: ignoring toolUltra.category on ${name}: empty`)
+    } else {
+      logger?.warn?.(`tool-manager: ignoring toolUltra.category on ${name}: expected a string`)
+    }
+  }
+  if (risk !== undefined) {
+    if (typeof risk === 'string' && (RISK_LEVELS as readonly string[]).includes(risk)) out.risk = risk as RiskLevel
+    else logger?.warn?.(`tool-manager: ignoring toolUltra.risk on ${name}: expected "low", "medium" or "high"`)
+  }
+  if (pinned !== undefined) {
+    if (typeof pinned === 'boolean') out.pinned = pinned
+    else logger?.warn?.(`tool-manager: ignoring toolUltra.pinned on ${name}: expected a boolean`)
+  }
+  return out
 }
 
 /** Merge every annotation that applies to `name`; later annotations win per field. */

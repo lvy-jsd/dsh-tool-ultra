@@ -22,6 +22,23 @@ export interface ToolMeta {
   summary?: string
 }
 
+/** Risk levels a plugin can declare on its own tools. */
+export type RiskLevel = 'low' | 'medium' | 'high'
+
+/**
+ * Optional self-declaration a plugin carries on each tool schema it registers
+ * (the `toolUltra` field). The catalog prefers it over the classification
+ * logic; user settings (metadata.json, settings.json) still win over it.
+ */
+export interface ToolUltraMeta {
+  /** Category name, with or without a leading "/" (e.g. "memory" or "/memory"). */
+  category?: string
+  /** Risk level; "high" marks the tool high risk for the risk gate. */
+  risk?: RiskLevel
+  /** Always-on (pinned) tool, not listed in the directory. */
+  pinned?: boolean
+}
+
 export interface Annotation {
   source?: string
   match: string | RegExp

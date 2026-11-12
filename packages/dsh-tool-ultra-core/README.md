@@ -215,6 +215,27 @@ ctx.effect(() => ctx.toolCatalog.annotate('adb_install', { risk: 'high' }))
 Fields: `group`, `category`, `risk` (`"high"`), `summary`. Exact-name entries
 win over `match`; runtime annotations win over `package.json`.
 
+### Self-declaration on the tool schema
+
+A third-party plugin can also declare its tools directly on each tool schema it
+registers, with an optional `toolUltra` field:
+
+```js
+ctx.tools.register({
+  name: 'memory_note',
+  description: 'Store a note.',
+  parameters: { ... },
+  toolUltra: { category: '/memory', risk: 'high', pinned: true },
+})
+```
+
+Fields: `category` (name, with or without a leading `/`), `risk`
+(`"low"` | `"medium"` | `"high"`; `"high"` marks the tool high risk for the
+risk gate), `pinned` (always-on, not listed in the directory). Invalid values
+are ignored with a log warning. Precedence: user settings (`metadata.json`,
+`settings.json`) > `toolUltra` > `package.json` / `annotate()` > classifiers >
+structural fallback.
+
 ### Tool packs
 
 A package of tools can register itself as a pack. It is then listed in the panel's Packs tab, and it can be loaded in one call with `tools_load(["pack:<id>"])`:
