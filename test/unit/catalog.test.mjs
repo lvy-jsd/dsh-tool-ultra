@@ -49,6 +49,32 @@ test('rules plugin defaults place common MCP server names', () => {
   assert.equal(category(cat, 'mcp__playwright__browser_click'), 'browser')
 })
 
+test('rules plugin defaults place third-party plugin tools', () => {
+  const thirdParty = [
+    'memory_list', 'memory_read', 'memory_search', 'memory_write', 'memory_delete', 'memory_delete_all', 'memory_prune',
+    'dsh_delegation', 'dsh_editor_git_commit', 'dsh_docs', 'dsh_plugins',
+    'dsh_editor_web_search', 'dsh_editor_session_manager', 'dsh_session_manager_retries',
+    'cua',
+    'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
+  ].map((name) => ({ name, description: `${name} does things.` }))
+  const cat = buildCatalog(thirdParty, { classifiers: [defaults] })
+  const expect = (tool, wantGroup, wantCategory) => {
+    assert.equal(group(cat, tool), wantGroup, tool)
+    assert.equal(category(cat, tool), wantCategory, tool)
+  }
+  for (const tool of ['memory_list', 'memory_read', 'memory_search', 'memory_write', 'memory_delete', 'memory_delete_all', 'memory_prune']) expect(tool, 'memory', 'memory')
+  expect('dsh_delegation', 'delegation', 'collaboration')
+  expect('dsh_editor_git_commit', 'git', 'code')
+  expect('dsh_docs', 'dev-index', 'code')
+  expect('dsh_plugins', 'dev-index', 'code')
+  expect('dsh_editor_web_search', 'web-search', 'search')
+  expect('dsh_editor_session_manager', 'session', 'collaboration')
+  expect('dsh_session_manager_retries', 'session', 'collaboration')
+  expect('cua', 'cua', 'device')
+  for (const tool of ['terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list']) expect(tool, 'terminal', 'system')
+  for (const tool of cat.tools.values()) assert.notEqual(tool.category, UNCATEGORIZED, tool.name)
+})
+
 test('rules plugin defines the categories its defaults use, and only with defaults on', () => {
   const run = (config) => {
     const defined = new Map()
