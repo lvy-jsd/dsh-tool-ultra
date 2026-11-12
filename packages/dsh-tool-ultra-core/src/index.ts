@@ -515,7 +515,10 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
       return visibility.agents().map((agent) => {
         const parent = visibility.parentOf(agent)
         const title = agent.session ? titles?.get?.(agent.session)?.title : undefined
-        return { agent, id: String(agent.id), parentId: parent ? String(parent.id) : null, title }
+        // The agent's model route (provider/model), when the host exposes it.
+        const options = (agent as { options?: { provider?: string, model?: string } }).options
+        const model = options?.model ? `${options.provider ?? ''}${options.provider ? '/' : ''}${options.model}` : options?.provider
+        return { agent, id: String(agent.id), parentId: parent ? String(parent.id) : null, title, model }
       })
     },
     /** Effective configuration, for UI display and editing. */

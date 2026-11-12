@@ -448,7 +448,7 @@ export interface ToolCatalogService {
   audit(): AuditEntry[]
   clearAudit(): void
   /** Live agents, each with its parent when it is a subagent. */
-  agents(): { agent: Agent, id: string, parentId: string | null, title?: string }[]
+  agents(): { agent: Agent, id: string, parentId: string | null, title?: string, model?: string }[]
   /** Effective configuration, for UI display. */
   config(): {
     paused: boolean

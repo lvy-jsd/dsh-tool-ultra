@@ -66,6 +66,8 @@ interface ClientContext {
       parentId: string | null
       /** Session title; a Bot's name when ds-bot set it. */
       title?: string
+      /** The agent's model route (provider/model), when the host exposes it. */
+      model?: string
       exempt: boolean
       /** 'file:provider' | 'file:session' | 'config:provider' | '' */
       exemptSource?: string
@@ -735,6 +737,7 @@ interface ClientContext {
         h('div', { key: s.id, className: 'tmp-card' },
           h('div', { className: 'tmp-bar' },
             h('span', { className: 'tmp-name', title: s.title ?? s.id }, s.title ?? s.id.replace(/^session-/, '').slice(0, 8)),
+            s.model ? h(Chip, { title: 'model' }, s.model) : null,
             s.parentId ? h(Chip, null, format(t, 'subagentOf', { id: s.parentId.replace(/^session-/, '').slice(0, 8) })) : null,
             s.exempt
               ? h(Chip, { tone: 'warn', title: `exempt · ${s.exemptSource === 'file:session' ? t('exemptSessionHint') : t('exemptHint')}` }, t('exempt'))
