@@ -143,3 +143,101 @@ test('invalid toolUltra values are ignored and logged once', (t) => {
   catalog.allowFor(agent)
   assert.equal(warnings.length, before)
 })
+
+// Like host(), but `schemas()` returns the given list verbatim, so two
+// "providers" can register the same tool name (the host dedupes by name, so
+// the real host only surfaces a collision through the layer merge). The
+// registered entry tools are captured so a test can call tools_ls directly.
+function hostWithSchemas(t, schemas) {
+  const dir = mkdtempSync(join(tmpdir(), 'b5-toolultra-dup-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const listeners = new Map()
+  const disposers = []
+  const on = (event, fn) => {
+    const handlers = listeners.get(event) ?? []
+    listeners.set(event, [...handlers, fn])
+    return () => listeners.set(event, (listeners.get(event) ?? []).filter((h) => h !== fn))
+  }
+  const effect = (fn) => { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose) }
+  t.after(() => disposers.reverse().forEach((dispose) => dispose()))
+  const restrictions = new Set()
+  const agent = { id: 'session-dup', options: { provider: 'fake' }, ctx: { tools: { restrict: ({ allow }) => { const entry = new Set(allow); restrictions.add(entry); return () => restrictions.delete(entry) } } } }
+  const services = {}
+  const warnings = []
+  const registered = new Map()
+  const ctx = {
+    logger: () => ({ warn: (m) => warnings.push(m), info() {}, debug() {} }),
+    tools: {
+      schemas: () => schemas,
+      register: (def) => { registered.set(def.name, def); return () => registered.delete(def.name) },
+    },
+    effect, on,
+    emit: (event, ...args) => { for (const fn of listeners.get(event) ?? []) fn(...args) },
+    serial: async (event, ...args) => { for (const fn of listeners.get(event) ?? []) await fn(...args) },
+    provide: (name, service) => { services[name] = service },
+    inject: (_deps, fn) => fn({ agents: { list: () => [agent], get: () => undefined }, effect, on }),
+    get: () => undefined,
+  }
+  apply(ctx, { settingsFile: join(dir, 'settings.json'), metadataFile: join(dir, 'metadata.json'), exemptFile: join(dir, 'exempt.json'), manifestFile: '', sidecar: { bin: '/nonexistent' } })
+  services.toolCatalog.refresh()
+  return { catalog: services.toolCatalog, agent, warnings, registered }
+}
+
+test('duplicate tool names: first registration wins, warning logged, entry marked', (t) => {
+  // Two providers register the same name; the host (first) version must win.
+  const schemas = [
+    { name: 'dup_tool', description: 'Host version.', parameters: {} },
+    { name: 'dup_tool', description: 'Plugin version.', parameters: {} },
+    { name: 'unique_tool', description: 'Only one registration.', parameters: {} },
+  ]
+  const { catalog, warnings } = hostWithSchemas(t, schemas)
+  const cat = catalog.get()
+  // Only one entry, and it is the first registration (the host's).
+  assert.equal(cat.tools.size, 2, 'the duplicate collapses to a single entry')
+  assert.equal(cat.tools.get('dup_tool').description, 'Host version.')
+  assert.equal(cat.tools.get('dup_tool').shadowed, true, 'the kept entry is marked')
+  // The unique tool is not marked.
+  assert.equal(cat.tools.get('unique_tool').shadowed, undefined)
+  // A warning names the collision.
+  assert.ok(warnings.some((w) => w.includes('dup_tool') && w.includes('duplicate')))
+  // The warning is not repeated on every rebuild.
+  const before = warnings.length
+  catalog.refresh()
+  catalog.get()
+  assert.equal(warnings.length, before)
+})
+
+test('duplicate tool names: the shadowed flag reaches tools_ls and find()', async (t) => {
+  const schemas = [
+    { name: 'dup_tool', description: 'Host version.', parameters: {} },
+    { name: 'dup_tool', description: 'Plugin version.', parameters: {} },
+  ]
+  const { catalog, agent, registered } = hostWithSchemas(t, schemas)
+  // The tools_ls listing of the group shows the [shadowed] marker.
+  const node = catalog.resolve('dup_tool')
+  assert.equal(node.kind, 'tool')
+  const listing = await registered.get('tools_ls').execute({ path: `/${node.tool.category}/${node.tool.group}` }, { agent })
+  // The [shadowed] marker sits on the dup_tool line (before its summary).
+  const line = listing.split('\n').find((l) => l.includes('dup_tool'))
+  assert.ok(line, `dup_tool line missing:\n${listing}`)
+  assert.ok(line.includes('[shadowed]'), `no [shadowed] marker:\n${listing}`)
+  // The structured find() result carries the flag.
+  const found = catalog.find('dup_tool')
+  assert.equal(found.length, 1)
+  assert.equal(found[0].shadowed, true)
+})
+
+test('no duplicate names: output is unchanged (no shadowed flag, no warning)', (t) => {
+  const schemas = [
+    { name: 'alpha_tool', description: 'First.', parameters: {} },
+    { name: 'beta_tool', description: 'Second.', parameters: {} },
+  ]
+  const { catalog, warnings } = hostWithSchemas(t, schemas)
+  const cat = catalog.get()
+  for (const tool of cat.tools.values()) assert.equal(tool.shadowed, undefined, tool.name)
+  assert.equal(warnings.filter((w) => w.includes('duplicate')).length, 0)
+  // The structured find() result has no shadowed field.
+  const found = catalog.find('alpha_tool')
+  assert.equal(found.length, 1)
+  assert.equal(found[0].shadowed, undefined)
+})

@@ -58,6 +58,13 @@ export interface ToolEntry {
   tokens: number
   highRisk: boolean
   annotation: ToolMeta
+  /**
+   * True when another registration uses the same name and was dropped in
+   * favor of this one (two plugins, or a pack tool and a host/other-plugin
+   * tool, registered the same name). The first registration wins, so this
+   * entry is the one that shadows the later one.
+   */
+  shadowed?: boolean
 }
 
 export interface Group {
@@ -368,6 +375,8 @@ export interface FoundTool {
   summary: string
   tokens: number
   highRisk: boolean
+  /** True when the name is registered by more than one provider (this one kept). */
+  shadowed?: boolean
 }
 
 /**

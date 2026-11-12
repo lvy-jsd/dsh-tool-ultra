@@ -212,6 +212,10 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   // warned about once per tool, not on every rebuild: the catalog is rebuilt
   // often, and the log is for the operator.
   const warnedToolUltra = new Set<string>()
+  // Duplicate tool names (two plugins, or a pack tool and a host/other-plugin
+  // tool, registered the same name) are warned about once per name, not on
+  // every rebuild, for the same reason.
+  const warnedShadowed = new Set<string>()
   function declaredMeta(schema: ToolSchema): ToolUltraMeta {
     if (schema.toolUltra === undefined) return {}
     const once = warnedToolUltra.has(schema.name) ? undefined : {
@@ -373,12 +377,30 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   /** Catalog for one agent, or for the union of all live agents when omitted. */
   const getCatalog = (agent?: Agent): Catalog => {
     const pinned = pinnedSet()
-    const byName = new Map<string, ToolSchema>(ctx.tools.schemas().map((s) => [s.name, s]))
+    // Duplicate names: the first registration wins. The host's merged view is
+    // added before the inherited (ancestor-layer) tools, so the host and the
+    // earlier registration take priority over a later one. The kept entry is
+    // marked `shadowed` so tools_ls and the panel can show the collision.
+    const byName = new Map<string, ToolSchema>()
+    const shadowed = new Set<string>()
+    const addSchema = (s: ToolSchema) => {
+      if (byName.has(s.name)) { shadowed.add(s.name); return }
+      byName.set(s.name, s)
+    }
+    for (const s of ctx.tools.schemas()) addSchema(s)
     for (const a of agent ? [agent] : visibility.agents()) {
-      for (const s of inheritedSchemas(a)) if (!byName.has(s.name)) byName.set(s.name, s)
+      for (const s of inheritedSchemas(a)) addSchema(s)
+    }
+    for (const name of shadowed) {
+      if (!warnedShadowed.has(name)) {
+        warnedShadowed.add(name)
+        logger.warn?.(`tool-manager: duplicate tool name "${name}": keeping the first registration, shadowing the later one(s)`)
+      }
     }
     const schemas = [...byName.values()].filter((s) => !pinned.has(s.name) && !HOST_RESERVED.includes(s.name))
-    const key = schemas.map((s) => s.name).sort().join('\n')
+    // The shadowed names join the key, so a collision appearing or going away
+    // rebuilds the catalog instead of reusing a stale mark.
+    const key = schemas.map((s) => s.name).concat([...shadowed].map((n) => `shadow:${n}`)).sort().join('\n')
     const cached = catalogs.get(key)
     if (cached) return cached
     ctx.emit('tool-catalog/before-rebuild', {})
@@ -397,6 +419,10 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
       categories: Object.fromEntries(registries.categories),
       highRisk: settings.effective().highRisk,
     })
+    for (const name of shadowed) {
+      const entry = catalog.tools.get(name)
+      if (entry) entry.shadowed = true
+    }
     catalogs.set(key, catalog)
     searchIndex.set(catalog, buildSearchIndex(catalog))
     // A client that receives its tool list once per session cannot discover the
@@ -796,7 +822,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   function toolLine(tool: ToolEntry, visible: Set<string> | null, denied: Set<string>, withPath = false): string {
     const marks = `${visible?.has(tool.name) ? '*' : ' '}${tool.highRisk ? '!' : ' '}`
     const label = withPath ? `/${tool.category}/${tool.group}/${tool.short}` : tool.short
-    return `  ${marks} ${pad(label, withPath ? 48 : 34)}${pad(fmtTokens(tool.tokens), 11)}${denied.has(tool.name) ? '[denied] ' : ''}${tool.summary}`
+    return `  ${marks} ${pad(label, withPath ? 48 : 34)}${pad(fmtTokens(tool.tokens), 11)}${denied.has(tool.name) ? '[denied] ' : ''}${tool.shadowed ? '[shadowed] ' : ''}${tool.summary}`
   }
 
   function listing(cat: Catalog, node: CatalogNode, visible: Set<string> | null, denied: Set<string> = new Set(), offset = 0, limit = LIST_PAGE): string {
@@ -848,7 +874,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
 
   /** One tool as the directory reports it. */
   function toFoundTool(tool: ToolEntry): FoundTool {
-    return {
+    const out: FoundTool = {
       name: tool.name,
       short: tool.short,
       path: `/${tool.category}/${tool.group}/${tool.short}`,
@@ -858,6 +884,9 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
       tokens: tool.tokens,
       highRisk: tool.highRisk === true,
     }
+    // Only present on a collision, so a duplicate-free directory is unchanged.
+    if (tool.shadowed) out.shadowed = true
+    return out
   }
 
   /** The strict keyword match: every word of the query appears in the text. */
