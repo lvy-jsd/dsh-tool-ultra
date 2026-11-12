@@ -66,7 +66,12 @@ function host(t, definitions) {
   apply(ctx, { settingsFile: join(dir, 'settings.json'), metadataFile: join(dir, 'metadata.json'), exemptFile: join(dir, 'exempt.json'), manifestFile: '', sidecar: { bin: '/nonexistent' } })
   // Registration finishes after the initial visibility mount, as in host startup.
   services.toolCatalog.refresh()
-  return { catalog: services.toolCatalog, agent, warnings }
+  // Register a tool after startup, the way a late MCP connection or a freshly
+  // installed plugin does: the host adds the schema and emits tools/change.
+  const register = (def) => { ctx.tools.register(def); ctx.emit('tools/change') }
+  // The tools the host would actually hand the agent: the installed restriction.
+  const visibleFor = (scope) => ctx.tools.schemas(scope).map((def) => def.name)
+  return { catalog: services.toolCatalog, agent, warnings, register, visibleFor }
 }
 
 test('a declared category places the tool in that category', (t) => {
@@ -240,4 +245,36 @@ test('no duplicate names: output is unchanged (no shadowed flag, no warning)', (
   const found = catalog.find('alpha_tool')
   assert.equal(found.length, 1)
   assert.equal(found[0].shadowed, undefined)
+})
+
+test('a tool registered after startup is re-catalogued: classified, searchable, and joins a loaded group', async (t) => {
+  const definitions = new Map([
+    ['mcp__fake__ping', { name: 'mcp__fake__ping', description: 'Ping the fake server.', parameters: {} }],
+    ['mcp__fake__echo', { name: 'mcp__fake__echo', description: 'Echo on the fake server.', parameters: {} }],
+  ])
+  const { catalog, agent, register, visibleFor } = host(t, definitions)
+  // Load the fake group before the new tool exists.
+  await catalog.load(agent, ['fake'])
+  assert.ok(visibleFor(agent).includes('mcp__fake__ping'))
+  assert.ok(!visibleFor(agent).includes('mcp__fake__fresh'), 'not there yet')
+
+  // A late MCP connection (or a freshly installed plugin) adds a tool to the group.
+  register({ name: 'mcp__fake__fresh', description: 'A tool the fake server gained later.', parameters: {} })
+
+  // It is re-catalogued: classified into the group and a category.
+  const entry = catalog.get().tools.get('mcp__fake__fresh')
+  assert.ok(entry, 'the new tool is in the catalog')
+  assert.equal(entry.group, 'fake', 'classified into the group by its name')
+  assert.equal(entry.category, 'uncategorized', 'no classifier, so uncategorized')
+
+  // It is searchable through the structured find() and through tools_ls(query).
+  const found = catalog.find('fresh')
+  assert.equal(found.length, 1)
+  assert.equal(found[0].name, 'mcp__fake__fresh')
+  const ls = await definitions.get('tools_ls').execute({ query: 'fresh' }, { agent })
+  assert.ok(ls.includes('/uncategorized/fake/fresh'), `tools_ls(query) should list it:\n${ls}`)
+
+  // The group loaded earlier now includes the new tool automatically: the host's
+  // installed restriction is refreshed, so the tool is callable without a reload.
+  assert.ok(visibleFor(agent).includes('mcp__fake__fresh'), 'a loaded group gains its new tool')
 })
