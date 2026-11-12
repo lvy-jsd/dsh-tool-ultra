@@ -1,0 +1,36 @@
+name: Nightly
+
+on:
+  schedule:
+    # 02:00 Perth (UTC+8) = 18:00 UTC.
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-full:
+    name: e2e full (dsh ${{ matrix.dsh }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh: [0.2.1-rc.5, 0.2.2-alpha.3]
+    env:
+      DSH_APP: ${{ github.workspace }}/../dsh-app
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Install DSH
+        run: |
+          mkdir -p "$DSH_APP"
+          cd "$DSH_APP"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund --ignore-scripts @deepseek-ai/dsh@${{ matrix.dsh }}
+      - run: npm install --no-audit --no-fund
+      - run: node test/e2e.mjs "$DSH_APP/node_modules/.bin/dsh"
+        env:
+          TM_E2E_TIER: full
