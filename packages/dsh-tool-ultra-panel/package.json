@@ -16,6 +16,10 @@
       "types": "./lib/client.d.ts",
       "default": "./lib/client.js"
     },
+    "./dsbot": {
+      "types": "./lib/dsbot.d.ts",
+      "default": "./lib/dsbot.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

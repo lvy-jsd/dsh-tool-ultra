@@ -10,5 +10,5 @@
     { "path": "../dsh-tool-ultra-core" }
   ],
   "include": ["src"],
-  "exclude": ["src/client.ts"]
+  "exclude": ["src/client.ts", "src/dsbot.ts"]
 }
