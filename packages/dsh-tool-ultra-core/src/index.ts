@@ -67,6 +67,20 @@ function pad(text: string, width: number): string {
   return text.length >= width ? `${text} ` : text + ' '.repeat(width - text.length)
 }
 
+// A directory page: listings longer than this are truncated, and the hint at
+// the end tells the model how to continue.
+const LIST_PAGE = 50
+
+/** One page of entry lines, with a continue hint when more entries follow. */
+function pageLines(entries: string[], offset: number, limit: number): string[] {
+  const start = Math.max(0, Math.floor(offset))
+  const end = Math.min(entries.length, start + Math.max(1, Math.floor(limit)))
+  const shown = entries.slice(start, end)
+  const rest = entries.length - end
+  if (rest > 0) shown.push(`  … ${rest} more; continue with offset=${end}`)
+  return shown
+}
+
 export function apply(ctx: HostContext, config: CoreConfig = {}) {
   const logger: Logger = (typeof ctx.logger === 'function' ? ctx.logger('tool-manager') : ctx.logger) ?? console
   // Values a UI may edit live in their own file, which wins per key over the
@@ -748,7 +762,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     return `  ${marks} ${pad(label, withPath ? 48 : 34)}${pad(fmtTokens(tool.tokens), 11)}${denied.has(tool.name) ? '[denied] ' : ''}${tool.summary}`
   }
 
-  function listing(cat: Catalog, node: CatalogNode, visible: Set<string> | null, denied: Set<string> = new Set()): string {
+  function listing(cat: Catalog, node: CatalogNode, visible: Set<string> | null, denied: Set<string> = new Set(), offset = 0, limit = LIST_PAGE): string {
     const count = (tools: readonly ToolEntry[]) => ({
       n: tools.length,
       loaded: tools.filter((t) => visible?.has(t.name)).length,
@@ -757,20 +771,24 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     const lines: string[] = []
     if (node.kind === 'root') {
       lines.push('/  (categories; * = loaded, ! = high risk, [denied] = loaded but blocked by another plugin; tools_ls with query searches everything)')
+      const entries: string[] = []
       for (const category of cat.categories.values()) {
         const c = count(category.groups.flatMap((g) => g.tools))
         if (c.n === 0 && category.name !== UNCATEGORIZED) continue
-        lines.push(`  ${pad(`${category.name}/`, 16)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${pad(fmtTokens(c.tokens), 11)}${category.description}`)
+        entries.push(`  ${pad(`${category.name}/`, 16)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${pad(fmtTokens(c.tokens), 11)}${category.description}`)
       }
+      lines.push(...pageLines(entries, offset, limit))
     } else if (node.kind === 'category') {
       lines.push(`/${node.category.name}/  ${node.category.description}`)
+      const entries: string[] = []
       for (const group of node.category.groups) {
         const c = count(group.tools)
-        lines.push(`  ${pad(`${group.name}/`, 22)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${fmtTokens(c.tokens)}${noteFor(group)}`)
+        entries.push(`  ${pad(`${group.name}/`, 22)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${fmtTokens(c.tokens)}${noteFor(group)}`)
       }
+      lines.push(...pageLines(entries, offset, limit))
     } else if (node.kind === 'group') {
       lines.push(`/${node.group.category}/${node.group.name}/${noteFor(node.group)}`)
-      for (const tool of node.group.tools) lines.push(toolLine(tool, visible, denied))
+      lines.push(...pageLines(node.group.tools.map((tool) => toolLine(tool, visible, denied)), offset, limit))
     } else if (node.kind === 'tool') {
       const t = node.tool
       lines.push(`/${t.category}/${t.group}/${t.short}`, `  name: ${t.name}`, `  ${t.summary}`, `  schema ${fmtTokens(t.tokens)}${t.highRisk ? ' · high risk: load it on its own' : ''}${visible?.has(t.name) ? ' · loaded' : ''}${denied.has(t.name) ? ' · denied by another plugin (e.g. an MCP connector rule): not callable' : ''}`)
@@ -1006,10 +1024,12 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   ctx.tools.register(defineTool({
     name: 'tools_ls',
     description:
-      'Browse every available tool as a directory: / lists categories, /<category> lists groups (a connector or plugin), /<category>/<group> lists tools with a one-line summary and schema size. Tools marked * are loaded (callable now). Most tools are hidden until loaded with tools_load. Pass query to search names and descriptions across the whole tree (or under path) in one step.',
+      'Browse every available tool as a directory: / lists categories, /<category> lists groups (a connector or plugin), /<category>/<group> lists tools with a one-line summary and schema size. Tools marked * are loaded (callable now). Most tools are hidden until loaded with tools_load. Pass query to search names and descriptions across the whole tree (or under path) in one step. Listings longer than 50 entries are truncated with a hint; pass offset (and limit) to page through them.',
     parameters: {
       path: { type: 'string', description: 'Directory path such as "/", "/code", "/code/github", or a group or tool name. Default "/".' },
       query: { type: 'string', description: 'Search words matched against tool name, group, category and description; searches everything under path.' },
+      offset: { type: 'number', description: 'Skip this many entries of the listing (default 0); the truncation hint names the offset to continue with.' },
+      limit: { type: 'number', description: `How many entries to show (default ${LIST_PAGE}).` },
     },
     output: TEXT_OUTPUT,
     isConcurrencySafe: () => true,
@@ -1020,7 +1040,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
       const agent = exec?.agent as Agent | undefined
       const visible = visibleSetFor(agent)
       const denied = deniedFor(agent)
-      if (!args.query) return listing(cat, node, visible, denied)
+      if (!args.query) return listing(cat, node, visible, denied, args.offset ?? 0, args.limit ?? LIST_PAGE)
       // The keyword match first; when it finds nothing, the ranked index
       // guesses, and a fallback (a small model) may say better.
       const keyword = keywordTools(cat, node, args.query)
