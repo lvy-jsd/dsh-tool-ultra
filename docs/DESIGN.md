@@ -107,7 +107,8 @@ model:
 
 - DSH core: `bash read write edit str_replace_editor glob grep read_image ask_user_question ask_user exit_plan_mode workflow todo_write present skill plan web_fetch web_search job_list job_output job_kill create_goal get_goal update_goal`
 - Delegation: `subagent subagent_fork list_subagent_models wait_agent interrupt_agent list_agents`
-- Memory lookup: `recall` (decision 2)
+- Memory lookup: `recall` (decision 2), `memory_search memory_read` (dsh-auto-memory, same reason; write operations stay lazy)
+- ds-bot: `show_view read_browser create_bot update_bot` (a Bot's prompt calls them directly; `ask_user` is in the DSH core line)
 - Entry tools: `tools_ls tools_load tools_unload`
 - Plus config `pinned`. Names the host lacks are ignored (survives renames).
 

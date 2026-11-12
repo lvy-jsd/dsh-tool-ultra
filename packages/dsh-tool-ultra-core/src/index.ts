@@ -52,6 +52,13 @@ export const DEFAULT_PINNED = [
   // team chat: a Bot's group prompt tells it to answer through these, so they
   // must never sit behind tools_load
   'group_relay', 'post_to_group', 'read_group_chat', 'read_own_chat', 'message_bot', 'list_bots',
+  // ds-bot: a Bot's prompt tells it to call these directly (show a view, read
+  // the browser, create and update its own Bot), so they must never sit behind
+  // tools_load; ask_user is already pinned above with the DSH core
+  'show_view', 'read_browser', 'create_bot', 'update_bot',
+  // dsh-auto-memory: same reason as recall — small and frequent; the write
+  // operations (memory_write, memory_delete, ...) stay lazy
+  'memory_search', 'memory_read',
 ]
 
 const TEXT_OUTPUT = {
