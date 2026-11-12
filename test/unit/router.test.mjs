@@ -159,6 +159,68 @@ test('tools_find: no match reports it', async () => {
   assert.ok(result.includes('No tools matched'))
 })
 
+// --- tools_find: query edge cases (Chinese, mixed, empty, whitespace, long) ---
+
+// A catalog with an English tool and a Chinese-described tool, so pure-Chinese
+// and mixed queries have something to match on each side.
+const cnCatalog = () => ({
+  get: () => ({ tools: new Map([
+    ['email', { name: 'email', short: 'email', group: 'mail', category: 'mail', summary: 'Send an email', description: 'Send an email to a recipient', tokens: 100, highRisk: false }],
+    ['search', { name: 'search', short: 'search', group: 'web', category: 'search', summary: 'Search the web', description: 'Search the web for results', tokens: 100, highRisk: false }],
+    ['cn_email', { name: 'cn_email', short: 'cn_email', group: 'mail', category: 'mail', summary: '发送邮件', description: '发送邮件给收件人', tokens: 100, highRisk: false }],
+  ]) }),
+  load: async (_agent, targets) => `Loaded ${targets.length} tool(s)`,
+  wireTokens: () => 100,
+})
+
+test('tools_find: pure Chinese query matches a Chinese-described tool', async () => {
+  const { ctx, registered } = makeCtx({ catalog: cnCatalog() })
+  registerRouter(ctx, { sidecar: { bin: '/nonexistent' } }, cnCatalog())
+  const find = registered.find((t) => t.name === 'tools_find')
+  const result = await find.execute({ query: '发送邮件' })
+  assert.ok(result.includes('cn_email'))
+  assert.ok(!result.includes('No tools matched'))
+})
+
+test('tools_find: Chinese-English mixed query matches both', async () => {
+  const { ctx, registered } = makeCtx({ catalog: cnCatalog() })
+  registerRouter(ctx, { sidecar: { bin: '/nonexistent' } }, cnCatalog())
+  const find = registered.find((t) => t.name === 'tools_find')
+  const result = await find.execute({ query: '发送邮件 email' })
+  assert.ok(result.includes('cn_email'))
+  assert.ok(result.includes('email'))
+  assert.ok(!result.includes('No tools matched'))
+})
+
+test('tools_find: empty query returns a friendly hint, not an error or everything', async () => {
+  const { ctx, registered } = makeCtx({ catalog: cnCatalog() })
+  registerRouter(ctx, { sidecar: { bin: '/nonexistent' } }, cnCatalog())
+  const find = registered.find((t) => t.name === 'tools_find')
+  const result = await find.execute({ query: '' })
+  assert.ok(typeof result === 'string' && result.length > 0)
+  // Not a dump of the whole catalog.
+  assert.ok(!result.includes('Best matches'))
+})
+
+test('tools_find: whitespace-only query returns a friendly hint', async () => {
+  const { ctx, registered } = makeCtx({ catalog: cnCatalog() })
+  registerRouter(ctx, { sidecar: { bin: '/nonexistent' } }, cnCatalog())
+  const find = registered.find((t) => t.name === 'tools_find')
+  const result = await find.execute({ query: '   ' })
+  assert.ok(typeof result === 'string' && result.length > 0)
+  assert.ok(!result.includes('Best matches'))
+})
+
+test('tools_find: overly long query does not throw', async () => {
+  const { ctx, registered } = makeCtx({ catalog: cnCatalog() })
+  registerRouter(ctx, { sidecar: { bin: '/nonexistent' } }, cnCatalog())
+  const find = registered.find((t) => t.name === 'tools_find')
+  // Many unique CJK tokens, so the query is long in both characters and terms.
+  const long = Array.from({ length: 2000 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join(' ')
+  const result = await find.execute({ query: long })
+  assert.ok(typeof result === 'string')
+})
+
 test('tools_route: retrieves and loads', async () => {
   let loadedTargets = null
   const catalog = toolCatalog()
