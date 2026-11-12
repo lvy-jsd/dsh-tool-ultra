@@ -994,20 +994,31 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   /** Hide targets again. Returns the model-facing text. */
   async function unloadTargets(agent: Agent, targets: readonly string[]): Promise<string> {
     const cat = getCatalog(agent)
+    // Report each target once: deduplicate on the trimmed name, keeping first
+    // order, so a repeated name is resolved and reported a single time.
+    const seen = new Set<string>()
+    const nodes: { raw: string, all: boolean, node: CatalogNode }[] = []
+    for (const raw of targets) {
+      const key = String(raw).trim()
+      if (seen.has(key)) continue
+      seen.add(key)
+      const all = key.toLowerCase() === 'all'
+      nodes.push({ raw: key, all, node: all ? { kind: 'root' } : resolveCatalogTarget(cat, key, agent) })
+    }
+    const uniqueTargets = nodes.map(({ raw }) => raw)
     try {
-      await ctx.serial('tool-catalog/before-unload', { agent, targets })
+      await ctx.serial('tool-catalog/before-unload', { agent, targets: uniqueTargets })
     } catch (error) {
-      recordAudit({ kind: 'unload', agentId: String(agent.id), summary: targets.join(', '), ok: false })
+      recordAudit({ kind: 'unload', agentId: String(agent.id), summary: uniqueTargets.join(', '), ok: false })
       return `Unload refused: ${errorText(error)}`
     }
     const before = new Set(visibility.allowFor(agent) ?? [])
     visibility.update(agent, (state) => {
-      for (const raw of targets) {
-        if (String(raw).trim().toLowerCase() === 'all') {
+      for (const { all, node } of nodes) {
+        if (all) {
           for (const set of Object.values(state)) set.clear()
           continue
         }
-        const node = resolveCatalogTarget(cat, raw, agent)
         if (node.kind === 'category' && node.category.aliasTools) {
           for (const tool of node.category.aliasTools) {
             state.loaded.delete(tool.name)
@@ -1030,9 +1041,23 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     })
     const after = new Set(visibility.allowFor(agent) ?? [])
     const removed = [...before].filter((n) => !after.has(n))
-    recordAudit({ kind: 'unload', agentId: String(agent.id), summary: targets.join(', '), ok: true })
-    ctx.emit('tool-catalog/after-unload', { agent, targets, removed })
-    return removed.length ? `Unloaded ${removed.length} tool(s):\n${removed.map((n) => `  ${n}`).join('\n')}` : 'Nothing was unloaded.'
+    recordAudit({ kind: 'unload', agentId: String(agent.id), summary: uniqueTargets.join(', '), ok: true })
+    ctx.emit('tool-catalog/after-unload', { agent, targets: uniqueTargets, removed })
+    const removedSet = new Set(removed)
+    // One line per target, so a mixed batch reports each target (unloaded /
+    // not loaded / not found) instead of only the tools that left.
+    const perTarget = nodes.map(({ raw, all, node }) => {
+      if (all) return removed.length ? `unloaded all: ${removed.length} tool(s)` : 'nothing was loaded'
+      if (node.kind === 'missing') return `skipped ${raw}: not found (try tools_ls with query)${didYouMean(cat, raw)}`
+      if (node.kind === 'root') return `skipped ${raw}: cannot unload the whole tree (use "all")`
+      const removedTools = toolsUnder(cat, node).filter((t) => removedSet.has(t.name))
+      return removedTools.length ? `unloaded: ${raw}` : `not loaded: ${raw}`
+    })
+    return [
+      removed.length ? `Unloaded ${removed.length} tool(s):` : 'Nothing was unloaded.',
+      ...removed.map((n) => `  ${n}`),
+      ...perTarget,
+    ].join('\n')
   }
 
   // --- tools -----------------------------------------------------------------------
@@ -1093,7 +1118,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   ctx.tools.register(defineTool({
     name: 'tools_unload',
     description:
-      'Hide loaded tools again to keep context small. Targets use the same forms as tools_load; "all" returns to the always-on set. Always-on tools cannot be unloaded.',
+      'Hide loaded tools again to keep context small. Targets use the same forms as tools_load; "all" returns to the always-on set. Always-on tools cannot be unloaded. Every target is reported individually (unloaded, not loaded, not found), so one bad name does not fail the rest of the batch.',
     parameters: {
       targets: { type: 'array', items: { type: 'string' }, required: true, description: 'Paths, group names, exact tool names, or "all".' },
     },
