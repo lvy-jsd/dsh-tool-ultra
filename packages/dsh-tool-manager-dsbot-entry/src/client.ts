@@ -64,11 +64,28 @@ interface PanelClientExports {
     const MARK = 'data-tool-manager-entry'
 
     // The panel's ds-bot helpers: the selector check and the theme variable
-    // mapping, so the panel takes ds-bot's colors inside its dialog.
-    const dsbot = require('@lvy-jsd/dsh-tool-ultra-panel/dsbot') as {
+    // mapping, so the panel takes ds-bot's colors inside its dialog. Published
+    // panel versions predate the /dsbot module; when it is not there, fall
+    // back to the inline copies of the same logic below.
+    let dsbot: {
       findDsbotSettingsDialog(root: { querySelector(selector: string): Element | null }): { dialog: Element, nav: Element, main: Element } | null
       dsbotThemeCss(): string
+    } | undefined
+    try {
+      const mod = require('@lvy-jsd/dsh-tool-ultra-panel/dsbot') as typeof dsbot
+      if (typeof mod?.findDsbotSettingsDialog === 'function' && typeof mod?.dsbotThemeCss === 'function') dsbot = mod
+    } catch {
+      // the panel version predates the /dsbot module
     }
+
+    // The theme mapping as CSS declarations: from the module when it is
+    // loaded, otherwise the inline copy of the same mapping.
+    const THEME_CSS = dsbot?.dsbotThemeCss() ?? `
+--dsw-alias-label-primary:var(--bt-ink);--dsw-alias-label-secondary:var(--bt-ink-2);--dsw-alias-label-tertiary:var(--bt-ink-3);
+--dsw-alias-border-l2:var(--bt-line-2);--dsw-alias-bg-layer-1:var(--bt-card);--dsw-alias-bg-layer-2:var(--bt-hover);
+--dsw-alias-interactive-bg-hover:var(--bt-hover);--dsw-alias-state-business-primary:var(--bt-accent);
+--dsw-alias-state-success-primary:var(--bt-green,#00c972);--dsw-alias-state-warn-primary:var(--bt-star,#ff9800);--dsw-alias-state-warn-label:var(--bt-star,#ff9800);
+--dsw-radius-md:10px;--dsw-radius-sm:8px`
 
     // ds-bot's theme variables mapped onto the host variables the panel uses,
     // so the panel takes ds-bot's colors inside its dialog.
@@ -76,7 +93,7 @@ interface PanelClientExports {
 .bt-settings[data-tool-manager-open] .bt-settings-nav>.bt-thumb{opacity:0}
 .bt-settings[data-tool-manager-open] .bt-settings-item[aria-current=page]{background:none;color:var(--bt-ink-2)}
 .bt-settings-item[${MARK}][data-active]{background:var(--bt-active);color:var(--bt-ink)}
-.tm-dsbot-host{position:absolute;top:0;bottom:0;left:198px;right:0;z-index:2;overflow-y:auto;box-sizing:border-box;padding:16px 56px 24px 20px;background:var(--bt-main);scrollbar-width:thin;${dsbot.dsbotThemeCss()}}
+.tm-dsbot-host{position:absolute;top:0;bottom:0;left:198px;right:0;z-index:2;overflow-y:auto;box-sizing:border-box;padding:16px 56px 24px 20px;background:var(--bt-main);scrollbar-width:thin;${THEME_CSS}}
 .tm-dsbot-host .tmp-section{max-width:none}
 .tm-dsbot-host .tmp-heading{font-size:15px;line-height:24px}
 .bt-settings-close{z-index:3}
@@ -96,7 +113,11 @@ interface PanelClientExports {
 
     /** Find the ds-bot settings dialog and its nav, or null when the DOM is not as expected. */
     function findDialog(): Found | null {
-      return dsbot.findDsbotSettingsDialog(document)
+      if (dsbot) return dsbot.findDsbotSettingsDialog(document)
+      const dialog = document.querySelector('.bt-settings[role=dialog]')
+      const nav = dialog?.querySelector(':scope > nav.bt-settings-nav')
+      const main = dialog?.querySelector(':scope > .bt-settings-main')
+      return dialog && nav && main ? { dialog, nav, main } : null
     }
 
     function makeEntry(Section: SectionComponent) {
