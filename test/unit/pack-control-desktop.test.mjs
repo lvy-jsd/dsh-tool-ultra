@@ -143,14 +143,44 @@ test('desktop: binary screenshots are private unique local PNGs and partial/erro
   assert.doesNotMatch(scriptOf(w.actions()[0]), /screenshot-screen|wl-copy/)
 })
 
+test('desktop: defineTool model output contains an attachment image, with explicit path fallbacks', async (ctx) => {
+  const dir = await folder(ctx)
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAbElEQVR4nA3JQQEAMAgDMZSgpEqqhOepQAlKqmjLN1VFFypcTLHFFSmqmm7UuJlmm2vSP0QLCYsRK05EP0wbGZsxa87EP4YeNHiYYYcbMj+WXrR4mWWXW7I/jj50+JhjjztyP0IHBYcJGy4kPLAsVIExyOP/AAAAAElFTkSuQmCC', 'base64')
+  const ref = { attachmentId: 'a'.repeat(64), mediaType: 'image/png', bytes: png.length, width: 1, height: 1, originalDimensions: { width: 2, height: 2 } }
+  const saved = [], registered = []
+  let store = { async saveImage(input) { saved.push(input); return ref } }
+  const f = fake(() => ok(png), session('niri'))
+  apply({ tools: { register: (t) => registered.push(t) }, get: (name) => name === 'attachments' ? store : undefined, on() {} }, { ...config, exec: f.exec, outputDir: dir, auditFile: '' })
+  const tool = registered.find((t) => t.name === 'desktop_screen')
+  const value = await tool.execute(args())
+  const blocks = tool.output.render(args(), value)
+  assert.deepEqual(blocks.map((b) => b.type), ['text', 'image'])
+  assert.deepEqual(blocks[1], { type: 'image', attachment: ref })
+  assert.match(blocks[0].text, /screenshot: .*\.png/)
+  assert.match(blocks[0].text, /Normalized from 2x2/)
+  assert.ok(!blocks[0].text.includes(ref.attachmentId), 'image is separate model content, never JSON text')
+  assert.deepEqual(saved[0].data, png)
+  assert.equal(saved[0].mediaType, 'image/png')
+  assert.equal(tool.presentResult, undefined, 'image rendering uses the model output, not a UI presenter')
+  store = undefined
+  assert.match(await tool.execute(args()), /Image not attached: no DSH attachments service/)
+  store = { async saveImage() { throw Error('IMAGE_TOO_LARGE password=example-secret') } }
+  const fallback = await tool.execute(args())
+  assert.match(fallback, /screenshot: .*\.png/)
+  assert.match(fallback, /Image not attached: IMAGE_TOO_LARGE/)
+  assert.doesNotMatch(fallback, /example-secret/)
+  assert.deepEqual(tool.output.render(args(), fallback).map((b) => b.type), ['text'])
+  assert.equal(saved.length, 1)
+})
+
 test('desktop: native window listings include IDs, focus and quoted titles for all backends', async () => {
   const fixtures = {
     x11: '42\n0x0000002a  0 Example.App desktop.example Example title\n',
     sway: JSON.stringify({ type: 'root', nodes: [{ type: 'con', id: 42, app_id: 'example', name: 'Example title', focused: true, rect: { x: 1, y: 2, width: 3, height: 4 } }], floating_nodes: [{ type: 'con', id: 43, window: 43, window_properties: { class: 'example' }, name: "Example's $(id); title", focused: false }] }),
     hyprland: JSON.stringify({ windows: [{ address: '0x2a', class: 'example', title: 'Example title', focusHistoryID: 0, at: [1, 2], size: [3, 4] }], active: { address: '0x2a' } }),
-    niri: JSON.stringify([{ id: 42, app_id: 'example', title: 'Example title', is_focused: true }]),
+    niri: JSON.stringify({ windows: [{ id: 42, app_id: 'example', title: 'Example title', is_focused: false, workspace_id: 2, layout: { tile_pos_in_workspace_view: [-10, 20], window_offset_in_tile: [2, 3], window_size: [400, 300], tile_size: [404, 306] } }], active: { id: 42 } }),
   }
-  const commands = { x11: "'wmctrl' '-lx'", sway: "'swaymsg' '-r' '-t' 'get_tree'", hyprland: "'hyprctl' '-j' 'activewindow'\nprintf '}'", niri: "'niri' 'msg' '--json' 'windows'" }
+  const commands = { x11: "'wmctrl' '-lx'", sway: "'swaymsg' '-r' '-t' 'get_tree'", hyprland: "'hyprctl' '-j' 'activewindow'\nprintf '}'", niri: "'niri' 'msg' '--json' 'focused-window'\nprintf '}'" }
   for (const [kind, raw] of Object.entries(fixtures)) {
     const f = fake(() => ok(raw), session(kind))
     const out = await tools({ exec: f.exec }).desktop_windows.execute(args())
@@ -163,6 +193,16 @@ test('desktop: native window listings include IDs, focus and quoted titles for a
   inactive.active = {}
   assert.match(desktopWindows('hyprland', JSON.stringify(inactive)), /"focused":false/, 'focus history is not proof a client currently has focus')
   assert.throws(() => desktopWindows('niri', '{}'), /Invalid compositor/)
+  const niri = desktopWindows('niri', fixtures.niri)
+  assert.match(niri, /"rect":\{"x":-8,"y":23,"width":400,"height":300\}/)
+  assert.match(niri, /workspace-view logical pixels/)
+  assert.match(niri, /"workspace_id":2/)
+  const noFocus = JSON.parse(fixtures.niri)
+  noFocus.active = null
+  noFocus.windows[0].is_focused = true
+  assert.match(desktopWindows('niri', JSON.stringify(noFocus)), /"focused":false/, 'focused-window null includes layer-shell focus')
+  delete noFocus.windows[0].layout.tile_pos_in_workspace_view
+  assert.doesNotMatch(desktopWindows('niri', JSON.stringify(noFocus)), /"rect"/, 'older/missing geometry is never invented')
   const f = fake(() => { throw new Error('must not use Xwayland') }, session('wayland', { XDG_CURRENT_DESKTOP: 'ExampleDE' }))
   await assert.rejects(tools({ exec: f.exec }).desktop_windows.execute(args()), /unsupported.*ExampleDE/)
 })
@@ -226,19 +266,62 @@ test('desktop: click validates coordinates/buttons and Wayland never starts a da
   assert.equal(f.calls.length, 0)
   await t.desktop_click.execute(args({ x: 1, y: 2, button: 'right' }))
   assert.ok(scriptOf(f.actions()[0]).endsWith("'xdotool' 'mousemove' '--sync' '1' '2' 'click' '3'"))
-  const missing = fake(() => ok(), session('niri'))
-  await assert.rejects(tools({ exec: missing.exec }).desktop_click.execute(args({ x: 1, y: 2 })), /YDOTOOL_SOCKET/)
-  assert.equal(missing.actions().length, 0)
+  const missing = fake(() => ok('', { code: 69, stderr: 'No accessible ydotoold socket. Set YDOTOOL_SOCKET.' }), session('niri'))
+  assert.match(await tools({ exec: missing.exec }).desktop_click.execute(args({ x: 1, y: 2 })), /YDOTOOL_SOCKET/)
+  const auto = scriptOf(missing.actions()[0])
+  assert.match(auto, /for candidate in '\/run\/ydotoold\/socket' '\/run\/user\/1000\/ydotoold\/socket'/)
+  assert.match(auto, /\[ -S "\$candidate" \] && \[ -w "\$candidate" \]/)
+  assert.match(auto, /\[ -z "\$\{YDOTOOL_SOCKET:-\}" \]/)
   const inherited = fake(() => ok(), session('niri', { YDOTOOL_SOCKET: '/example/inherited-seat.sock' }))
-  await assert.rejects(tools({ exec: inherited.exec }).desktop_click.execute(args({ x: 1, y: 2 })), /YDOTOOL_SOCKET/)
-  assert.equal(inherited.actions().length, 0, 'an inherited daemon socket does not authorize seat-level input')
+  await tools({ exec: inherited.exec }).desktop_click.execute(args({ x: 1, y: 2 }))
+  assert.match(scriptOf(inherited.actions()[0]), /YDOTOOL_SOCKET='\/example\/inherited-seat.sock'/)
   const wayland = fake(() => ok(), session('hyprland', { YDOTOOL_SOCKET: "/example/socket's $(id)" }))
   const hosts = { example: { target: 'user@desktop.example', desktop: { env: { YDOTOOL_SOCKET: "/example/socket's $(id)" } } } }
   await tools({ exec: wayland.exec, hosts }).desktop_click.execute(args({ x: 1, y: 2, button: 'middle' }))
   const script = scriptOf(wayland.actions()[0])
   assert.ok(script.includes(`YDOTOOL_SOCKET=${shq("/example/socket's $(id)")}`))
   assert.ok(script.endsWith("'ydotool' 'mousemove' '--absolute' '-x' '1' '-y' '2' && 'ydotool' 'click' '0xC2'"))
-  assert.doesNotMatch(script, /sudo|ydotoold|systemctl/)
+  assert.doesNotMatch(script, /sudo|systemctl|exec ['"]?ydotoold/)
+})
+
+test('desktop: niri keyboard uses ydotool evdev codes and stdin; wtype remains configurable', async () => {
+  const f = fake(() => ok(), session('niri', { DISPLAY: ':0', XDG_SESSION_TYPE: 'wayland', XDG_CURRENT_DESKTOP: 'niri' }))
+  const t = tools({ exec: f.exec })
+  const text = "--help ' $(id); `false` \\ \"literal\"\n\t"
+  await t.desktop_type.execute(args({ text }))
+  assert.equal(f.actions()[0].options.stdin, text)
+  assert.ok(!scriptOf(f.actions()[0]).includes(text))
+  assert.ok(scriptOf(f.actions()[0]).endsWith("'ydotool' 'type' '--file' '-'"))
+  await t.desktop_key.execute(args({ combo: 'ctrl+shift+l' }))
+  assert.ok(scriptOf(f.actions()[1]).endsWith("'ydotool' 'key' '29:1' '42:1' '38:1' '38:0' '42:0' '29:0'"))
+  for (const [combo, code] of [['Return', 28], ['super+F24', 194], ['alt+Tab', 15], ['ctrl+plus', 13], ['A', 30]]) {
+    await t.desktop_key.execute(args({ combo }))
+    const script = scriptOf(f.actions().at(-1))
+    assert.ok(script.includes(`'${code}:1' '${code}:0'`), combo)
+    assert.doesNotMatch(script, /'wtype'|'xdotool'/)
+  }
+  const count = f.actions().length
+  for (const text of ['中文', 'é', 'x\r', 'x\x1b']) await assert.rejects(t.desktop_type.execute(args({ text })), /ASCII/)
+  assert.equal(f.actions().length, count, 'unsupported characters fail before any input')
+  const w = fake(() => ok(), session('niri'))
+  const wt = tools({ exec: w.exec, hosts: { example: { target: 'user@desktop.example', desktop: { keyboard: 'wtype' } } } })
+  await wt.desktop_type.execute(args({ text: '中文' }))
+  await wt.desktop_key.execute(args({ combo: 'ctrl+l' }))
+  assert.ok(scriptOf(w.actions()[0]).endsWith("'wtype' '-'"))
+  assert.ok(scriptOf(w.actions()[1]).endsWith("'wtype' '-M' 'ctrl' '-k' 'l' '-m' 'ctrl'"))
+  assert.throws(() => checkDesktopSession({ keyboard: 'exec bad' }), /desktop.keyboard/)
+})
+
+test('desktop: partial niri session markers with Xwayland DISPLAY still select Wayland', async () => {
+  for (const marker of [{ XDG_SESSION_TYPE: 'wayland' }, { XDG_CURRENT_DESKTOP: 'niri' }, { NIRI_SOCKET: '/run/user/1000/niri.wayland-1.example.sock' }]) {
+    const raw = snapshot({ records: [record(1000, { DISPLAY: ':0', ...marker })], sockets: [{ path: '/tmp/.X11-unix/X0', uid: 0 }, { path: '/run/user/1000/wayland-1' }, { path: '/run/user/1000/niri.wayland-1.example.sock' }] })
+    const f = fake(() => ok('clipboard'), raw)
+    await tools({ exec: f.exec }).desktop_clipboard_get.execute(args())
+    assert.equal(selectDesktopSession(raw).kind, 'niri')
+    assert.ok(scriptOf(f.actions()[0]).endsWith("'wl-paste' '--no-newline' '--type' 'text'"))
+    assert.equal(selectDesktopSession(raw, { backend: 'x11' }).kind, 'x11', 'explicit backend selection remains available')
+  }
+  assert.throws(() => selectDesktopSession(snapshot({ records: [record(1000, { DISPLAY: ':0', XDG_SESSION_TYPE: 'wayland' })], sockets: [{ path: '/tmp/.X11-unix/X0', uid: 0 }] })), /No active graphical/)
 })
 
 test('desktop: text failures, timeout and truncation are explicit and redacted', async () => {
@@ -353,6 +436,9 @@ test('desktop: Xwayland is suppressed and env overrides preserve literal data wi
   const conflict = snapshot({ records: [record(1000, { DISPLAY: ':0', XAUTHORITY: '/example/a' }), record(1000, { DISPLAY: ':0', XAUTHORITY: '/example/b' })], sockets: [{ path: '/tmp/.X11-unix/X0', uid: 0 }] })
   assert.throws(() => selectDesktopSession(conflict), /Conflicting graphical session/)
   assert.equal(selectDesktopSession(conflict, { env: { XAUTHORITY: '/example/selected' } }).env.XAUTHORITY, '/example/selected')
+  const inputConflict = snapshot({ records: [record(1000, wayland({ YDOTOOL_SOCKET: '/example/a' })), record(1000, wayland({ YDOTOOL_SOCKET: '/example/b' }))], sockets: [{ path: '/run/user/1000/wayland-1' }] })
+  assert.throws(() => selectDesktopSession(inputConflict), /Conflicting graphical session/)
+  assert.equal(selectDesktopSession(inputConflict, { env: { YDOTOOL_SOCKET: '/run/ydotoold/socket' } }).env.YDOTOOL_SOCKET, '/run/ydotoold/socket')
   for (const user of ['-option', 'example;id', '$(id)', 'example\nroot', 1000]) assert.throws(() => checkDesktopSession({ user }), /desktop.user/)
 })
 

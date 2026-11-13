@@ -8,6 +8,7 @@ import { capText, redact, shq } from './kit/policy.js'
 import type { ExecResult } from './kit/exec.js'
 import type { ToolSpec } from './kit/spec.js'
 import { checkDesktopSession, desktopProbeScript, selectDesktopSession, type DesktopBackend } from './desktop-session.js'
+import { ydotoolKeys, ydotoolSocket } from './desktop-input.js'
 
 export * from './desktop-session.js'
 export const DESKTOP_TOOL_NAMES = ['desktop_screen', 'desktop_windows', 'desktop_focus', 'desktop_click', 'desktop_type', 'desktop_key', 'desktop_clipboard_get', 'desktop_clipboard_set'] as const
@@ -82,9 +83,28 @@ export function desktopWindows(backend: DesktopBackend['kind'], raw: string): st
       }
       visit(data)
     } else {
-      const windows = backend === 'hyprland' ? data.windows : data
+      const windows = data.windows ?? data
       if (!Array.isArray(windows)) throw new Error('Invalid compositor window list.')
-      rows = windows.map((w) => ({ id: String(backend === 'hyprland' ? w.address : w.id), app: String(w.app_id ?? w.class ?? ''), title: String(w.title ?? ''), focused: backend === 'hyprland' ? w.address === data.active?.address : w.is_focused === true, ...(backend === 'hyprland' ? { rect: { x: w.at?.[0], y: w.at?.[1], width: w.size?.[0], height: w.size?.[1] } } : {}) }))
+      rows = windows.map((w) => {
+        const common = { app: String(w.app_id ?? w.class ?? ''), title: String(w.title ?? '') }
+        if (backend === 'hyprland') return {
+          ...common, id: String(w.address), focused: w.address === data.active?.address,
+          rect: { x: w.at?.[0], y: w.at?.[1], width: w.size?.[0], height: w.size?.[1] },
+        }
+        const layout = w.layout
+        const pair = (v: unknown): v is [number, number] => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n))
+        // niri layout positions belong to a workspace view, not the global
+        // output/screenshot coordinate space. Older versions omit this data.
+        const rect = layout && pair(layout.tile_pos_in_workspace_view) && pair(layout.window_offset_in_tile) && pair(layout.window_size)
+          ? { x: layout.tile_pos_in_workspace_view[0] + layout.window_offset_in_tile[0], y: layout.tile_pos_in_workspace_view[1] + layout.window_offset_in_tile[1], width: layout.window_size[0], height: layout.window_size[1] }
+          : undefined
+        return {
+          ...common, id: String(w.id), workspace_id: w.workspace_id ?? null,
+          focused: Object.hasOwn(data, 'active') ? w.id === data.active?.id : w.is_focused === true,
+          ...(layout ? { layout, coordinate_space: 'workspace-view logical pixels' } : {}),
+          ...(rect ? { rect } : {}),
+        }
+      })
     }
   }
   return `${backend}: ${rows.length} windows\n${rows.map((w) => JSON.stringify(w)).join('\n')}`.trimEnd()
@@ -129,7 +149,8 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
   const specs: ToolSpec[] = [
     {
       name: 'desktop_screen', pack: 'desktop', risk: 'low',
-      description: 'Screenshot a remote Linux desktop over SSH. Saves a local PNG path for read_image; never changes the clipboard.',
+      screenshot: true,
+      description: 'Screenshot a remote Linux desktop over SSH. Returns an image when DSH attachments are available, plus a local PNG path. Never changes the clipboard.',
       parameters: { host: hostParam }, describe: (a) => summary(a?.host, 'desktop screenshot'),
       async execute(a) {
         const b = await session(a?.host)
@@ -151,7 +172,7 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
       parameters: { host: hostParam }, describe: (a) => summary(a?.host, 'list desktop windows'),
       async execute(a) {
         const b = await session(a?.host), cmd = wm(b)
-        const scripts = { x11: `${command('xdotool', 'getactivewindow')} || printf '0\n'\n${command('wmctrl', '-lx')}`, sway: command('swaymsg', '-r', '-t', 'get_tree'), hyprland: `printf '{"windows":'\n${command('hyprctl', '-j', 'clients')}\nprintf ',"active":'\n${command('hyprctl', '-j', 'activewindow')}\nprintf '}'`, niri: command('niri', 'msg', '--json', 'windows'), wayland: '' }
+        const scripts = { x11: `${command('xdotool', 'getactivewindow')} || printf '0\n'\n${command('wmctrl', '-lx')}`, sway: command('swaymsg', '-r', '-t', 'get_tree'), hyprland: `printf '{"windows":'\n${command('hyprctl', '-j', 'clients')}\nprintf ',"active":'\n${command('hyprctl', '-j', 'activewindow')}\nprintf '}'`, niri: `printf '{"windows":'\n${command('niri', 'msg', '--json', 'windows')}\nprintf ',"active":'\n${command('niri', 'msg', '--json', 'focused-window')}\nprintf '}'`, wayland: '' }
         const r = await run(a.host, b, b.kind === 'x11' ? [cmd, 'xdotool'] : [cmd], scripts[b.kind])
         if (r.code !== 0 || r.timedOut || r.truncated) return failure(r, maxChars)
         return capText(redact(desktopWindows(b.kind, r.stdout)), maxChars)
@@ -181,7 +202,7 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
     },
     {
       name: 'desktop_click', pack: 'desktop', risk: 'medium',
-      description: 'Click remote desktop coordinates over SSH. Always asks. On Wayland needs an already configured ydotool daemon; never starts it or uses sudo.',
+      description: 'Click remote desktop coordinates over SSH. Always asks. Wayland uses an existing ydotoold socket; coordinates need manual calibration with scaling/multiple outputs or acceleration. Never starts a daemon.',
       parameters: { host: hostParam, x: { type: 'integer', required: true, description: 'Desktop x coordinate.' }, y: { type: 'integer', required: true, description: 'Desktop y coordinate.' }, button: { type: 'string', enum: ['left', 'middle', 'right'], description: 'Default left; one click.' } },
       describe: (a) => summary(a?.host, 'click desktop'), approve: (a) => summary(a?.host, `click desktop at ${a?.x},${a?.y}`),
       async execute(a) {
@@ -192,37 +213,35 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
         const cmd = b.kind === 'x11' ? 'xdotool' : 'ydotool'
         if (b.kind === 'x11') script = command(cmd, 'mousemove', '--sync', x, y, 'click', String({ left: 1, middle: 2, right: 3 }[button as string]))
         else {
-          // ydotool injects at seat level. With multiple graphical seats its
-          // socket must be explicitly selected by the administrator.
-          if (!hostOf(a.host).desktop?.env?.YDOTOOL_SOCKET) throw new Error('Wayland clicks require hosts.<alias>.desktop.env.YDOTOOL_SOCKET for an already running ydotoold serving this desktop seat. Configure permissions/absolute pointer mapping yourself; no sudo or daemon startup is attempted.')
-          script = `${command(cmd, 'mousemove', '--absolute', '-x', x, '-y', y)} && ${command(cmd, 'click', String({ left: '0xC0', middle: '0xC2', right: '0xC1' }[button as string]))}`
+          script = `${ydotoolSocket(b)}\n${command(cmd, 'mousemove', '--absolute', '-x', x, '-y', y)} && ${command(cmd, 'click', String({ left: '0xC0', middle: '0xC2', right: '0xC1' }[button as string]))}`
         }
         return done(await run(a.host, b, [cmd], script), `clicked ${x},${y} (${button})`)
       },
     },
     {
       name: 'desktop_type', pack: 'desktop', risk: 'medium',
-      description: 'Type literal UTF-8 text into the focused remote desktop window. Always asks; newline/tab can activate UI. Does not paste or modify the clipboard.',
+      description: 'Type text into the focused remote desktop window. Always asks; newline/tab can activate UI. niri defaults to ydotool (ASCII, US layout); optional wtype supports UTF-8. Does not paste or change clipboard.',
       parameters: { host: hostParam, text: { type: 'string', required: true, description: 'Literal text, max 20000 UTF-8 bytes.' } },
       describe: (a) => summary(a?.host, `type ${Buffer.byteLength(String(a?.text ?? ''))} bytes on desktop`), approve: (a) => summary(a?.host, `type ${Buffer.byteLength(String(a?.text ?? ''))} bytes in the focused window (newlines may submit)`),
       async execute(a) {
         const text = textArg(a?.text, 'text', 20_000)
-        const b = await session(a?.host), cmd = b.kind === 'x11' ? 'xdotool' : 'wtype'
-        const script = b.kind === 'x11' ? command(cmd, 'type', '--clearmodifiers', '--file', '-') : command(cmd, '-')
+        const b = await session(a?.host), cmd = b.kind === 'x11' ? 'xdotool' : hostOf(a.host).desktop?.keyboard ?? (b.kind === 'niri' ? 'ydotool' : 'wtype')
+        if (cmd === 'ydotool' && /[^\x20-\x7e\n\t]/.test(text)) throw new Error('ydotool typing supports printable ASCII, tab and newline on a US keyboard layout only. For Unicode use desktop.keyboard: wtype if the compositor supports virtual-keyboard; no text was sent.')
+        const script = b.kind === 'x11' ? command(cmd, 'type', '--clearmodifiers', '--file', '-') : cmd === 'ydotool' ? `${ydotoolSocket(b)}\n${command(cmd, 'type', '--file', '-')}` : command(cmd, '-')
         return done(await run(a.host, b, [cmd], script, text), `typed ${Buffer.byteLength(text)} bytes`)
       },
     },
     {
       name: 'desktop_key', pack: 'desktop', risk: 'medium',
-      description: 'Send one key combination to the focused remote desktop window, e.g. ctrl+l, alt+Tab, Return. Always asks; Wayland requires virtual-keyboard support for wtype.',
+      description: 'Send one key combination to the focused remote desktop window, e.g. ctrl+l, alt+Tab, Return. Always asks. niri defaults to ydotool evdev keys; optional wtype needs virtual-keyboard support.',
       parameters: { host: hostParam, combo: { type: 'string', required: true, description: 'ctrl/alt/shift/super + letter, digit, F1-F24 or navigation key.' } },
       describe: (a) => summary(a?.host, 'desktop key combo'), approve: (a) => summary(a?.host, `send desktop key ${capText(redact(String(a?.combo ?? '')), 100)}`),
       async execute(a) {
         const { modifiers, key } = desktopCombo(a?.combo)
-        const b = await session(a?.host), cmd = b.kind === 'x11' ? 'xdotool' : 'wtype'
+        const b = await session(a?.host), cmd = b.kind === 'x11' ? 'xdotool' : hostOf(a.host).desktop?.keyboard ?? (b.kind === 'niri' ? 'ydotool' : 'wtype')
         const xmods: Record<string, string> = { ctrl: 'ctrl', alt: 'alt', shift: 'shift', logo: 'super' }
-        const args = b.kind === 'x11' ? ['key', '--clearmodifiers', [...modifiers.map((m) => xmods[m]), key].join('+')] : [...modifiers.flatMap((m) => ['-M', m]), '-k', key, ...[...modifiers].reverse().flatMap((m) => ['-m', m])]
-        return done(await run(a.host, b, [cmd], command(cmd, ...args)), 'sent desktop key combo')
+        const args = b.kind === 'x11' ? ['key', '--clearmodifiers', [...modifiers.map((m) => xmods[m]), key].join('+')] : cmd === 'ydotool' ? ['key', ...ydotoolKeys(modifiers, key)] : [...modifiers.flatMap((m) => ['-M', m]), '-k', key, ...[...modifiers].reverse().flatMap((m) => ['-m', m])]
+        return done(await run(a.host, b, [cmd], `${cmd === 'ydotool' ? ydotoolSocket(b) + '\n' : ''}${command(cmd, ...args)}`), 'sent desktop key combo')
       },
     },
     {
