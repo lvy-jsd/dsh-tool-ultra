@@ -75,6 +75,22 @@ test('rules plugin defaults place third-party plugin tools', () => {
   for (const tool of cat.tools.values()) assert.notEqual(tool.category, UNCATEGORIZED, tool.name)
 })
 
+test('rules plugin defaults place Tool Ultra and DSH built-in tools', () => {
+  const builtIn = [
+    'tools_find', 'tools_route', 'skills_find', 'skills_route',
+    'list_sessions', 'read_session', 'search_sessions', 'working_directory',
+  ].map((name) => ({ name, description: `${name} does things.` }))
+  const cat = buildCatalog(builtIn, { classifiers: [defaults] })
+  const expect = (tool, wantGroup, wantCategory) => {
+    assert.equal(group(cat, tool), wantGroup, tool)
+    assert.equal(category(cat, tool), wantCategory, tool)
+  }
+  for (const tool of ['tools_find', 'tools_route', 'skills_find', 'skills_route']) expect(tool, 'tool-manager', 'system')
+  for (const tool of ['list_sessions', 'read_session', 'search_sessions']) expect(tool, 'session', 'collaboration')
+  expect('working_directory', 'terminal', 'system')
+  for (const tool of cat.tools.values()) assert.notEqual(tool.category, UNCATEGORIZED, tool.name)
+})
+
 test('rules plugin defines the categories its defaults use, and only with defaults on', () => {
   const run = (config) => {
     const defined = new Map()
