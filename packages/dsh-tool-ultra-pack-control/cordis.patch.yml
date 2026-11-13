@@ -9,6 +9,7 @@
           ssh-exec: false
           adb: false
           adb-root: false
+          desktop: false
         # true: register only the read-only tools, whatever packs says.
         readOnly: false
         # Tools to leave out, by name (e.g. [ssh_put]).
@@ -18,6 +19,13 @@
         hosts: {}
         #  nix: { target: 'root@host.example' }
         #  box: { target: 'root@box.example', port: 2222, identity: '/root/.ssh/id_ed25519' }
+        #  example-desktop: { target: 'user@desktop.example' }
+        # Root SSH automatically selects an active graphical user and drops to
+        # that UID. With several active users, select desktop.user per host:
+        # desktop: { user: example-user, backend: x11, env: { DISPLAY: ':0' } }
+        # Successful sessions are cached per host for 3 seconds; 0 disables it.
+        # desktopCacheMs: 3000
+        # See README for Wayland session/IPC and existing ydotool socket overrides.
         # Android aliases -> wireless endpoint or serial. Pair beforehand using
         # adb pair as needed; only these targets are connected/listed/selected.
         serials: {}

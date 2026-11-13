@@ -28,6 +28,8 @@
 //           of an approval channel and never reaches the client
 //   control-adb core + risk-gate + the Android packs with a fake adb client:
 //           UI dumps run; root shell calls require an approval channel
+//   control-desktop core + risk-gate + desktop over fake SSH hosts:
+//           native window lists/screenshots run; input needs call approval (full tier)
 //
 // Usage: node test/e2e.mjs [path/to/dsh]   (default: ~/.local/bin/dsh)
 import { spawn, spawnSync } from 'node:child_process'
@@ -62,7 +64,8 @@ const profileNeeds = {
   persist: ['persist-main', 'persist-resume'], attr: ['attr-main'],
   'attr-rules': ['attr-rules-main'], exempt: ['exempt-main'], gate: ['gate-main'],
   cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'],
-  control: ['control-main', 'control-adb-disabled'], 'control-adb': ['control-adb-main'],
+  control: ['control-main', 'control-adb-disabled', 'control-desktop-disabled'], 'control-adb': ['control-adb-main'],
+  'control-desktop': ['control-desktop-main'],
 }
 const needProfile = (name) => profileNeeds[name].some(include)
 
@@ -239,6 +242,63 @@ if (JSON.stringify(argv) === JSON.stringify(['connect', 'phone.example:5555'])) 
     auditFile: ${join(root, 'control-adb-audit.jsonl')}
     serials:
       example-phone: 'phone.example:5555'
+`)
+}
+
+// Each fake destination reports a different compositor. Unknown hosts must not
+// reach even the probe; a refused input call must produce no SSH invocation.
+const fakeDesktopSsh = join(root, 'fake-desktop-ssh.mjs')
+const fakeDesktopLog = join(root, 'fake-desktop-ssh.jsonl')
+const desktopOutputDir = join(root, 'desktop-screens')
+const desktopPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGoAAAAASUVORK5CYII=', 'base64')
+if (needProfile('control-desktop')) {
+  writeFileSync(fakeDesktopSsh, `#!${process.execPath}
+import { appendFileSync, readFileSync } from 'node:fs'
+const argv = process.argv.slice(2), remote = argv.at(-1), stdin = readFileSync(0, 'utf8')
+const target = argv[argv.indexOf('--') + 1]
+appendFileSync(${JSON.stringify(fakeDesktopLog)}, JSON.stringify({ argv, stdin }) + '\\n')
+const kind = target === 'root@desktop.example' ? 'x11' : target === 'user@wayland.example' ? 'sway' : null
+if (!kind) throw new Error('Unexpected fake SSH destination')
+if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
+  const b64 = (s) => Buffer.from(s).toString('base64')
+  const env = kind === 'x11' ? { DISPLAY: ':0', XAUTHORITY: '/run/user/1000/example.Xauthority', XDG_SESSION_ID: 'example-session' } : { WAYLAND_DISPLAY: 'wayland-1', XDG_RUNTIME_DIR: '/run/user/1000', SWAYSOCK: '/run/user/1000/sway-ipc.example.sock' }
+  process.stdout.write(['DSH_DESKTOP_V2', 'I\\t' + (kind === 'x11' ? '0' : '1000'),
+    'U\\t' + b64('root:0:0:/root\\nexample:1000:1000:/home/example'),
+    'L\\texample-session\\t' + b64('User=1000\\nActive=yes\\nType=' + (kind === 'x11' ? 'x11' : 'wayland') + '\\nClass=user\\nState=active'),
+    'P\\t1000\\t' + b64(Object.entries(env).map(([k, v]) => k + '=' + v + '\\0').join('')),
+    'S\\t' + (kind === 'x11' ? '0' : '1000') + ':42\\t' + b64(kind === 'x11' ? '/tmp/.X11-unix/X0' : '/run/user/1000/wayland-1'), 'END', ''].join('\\n'))
+} else if (kind === 'x11' && (!remote.includes('--reuid') || !remote.includes('--init-groups') || !remote.includes('runuser'))) {
+  throw new Error('Root desktop action must drop to the graphical user')
+} else if (remote.includes('get_tree')) {
+  process.stdout.write(JSON.stringify({ type: 'root', nodes: [{ type: 'con', id: 42, app_id: 'example.app', name: 'Example Wayland window', focused: true }] }))
+} else if (remote.includes('getactivewindow')) {
+  process.stdout.write('42\\n0x0000002a 0 example.App desktop.example Example X11 window\\n')
+} else if (remote.includes('Missing remote command: scrot.') || remote.includes('Missing remote command: grim.')) {
+  process.stdout.write(Buffer.from(${JSON.stringify(desktopPng.toString('base64'))}, 'base64'))
+} else if (remote.includes('Missing remote command: wl-paste.') || remote.includes('Missing remote command: xclip.')) {
+  process.stdout.write('Example desktop clipboard')
+} else {
+  process.stderr.write('Unexpected fake desktop action\\n')
+  process.exitCode = 1
+}
+`, { mode: 0o755 })
+  makeProfile('control-desktop', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
+- id: tool-manager-risk-gate
+  name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
+  config:
+    allow: { '*': true }
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs: { ssh: false, desktop: true }
+    sshBin: ${fakeDesktopSsh}
+    multiplex: false
+    desktopCacheMs: 0
+    outputDir: ${desktopOutputDir}
+    auditFile: ${join(root, 'control-desktop-audit.jsonl')}
+    hosts:
+      example: { target: 'root@desktop.example' }
+      example-wayland: { target: 'user@wayland.example' }
 `)
 }
 
@@ -574,6 +634,56 @@ check('control adb: only the permitted UI call reached the adb client',
   && JSON.stringify(adbSeen[1].argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'sh'])
   && adbSeen[1].stdin.includes('uiautomator dump --compressed '),
   JSON.stringify(adbSeen))
+}
+
+// --- Remote desktop control scenarios (full tier only) -----------------------
+const DESKTOP = ['desktop_screen', 'desktop_windows', 'desktop_focus', 'desktop_click', 'desktop_type', 'desktop_key', 'desktop_clipboard_get', 'desktop_clipboard_set'].sort()
+const desktopTools = (turn) => turn.tools.filter((name) => DESKTOP.includes(name)).sort()
+if (include('control-desktop-disabled')) {
+console.log('# control profile: desktop pack disabled')
+const off = await run('control', 'control-desktop-disabled', [
+  call('tools_ls', { path: '/device/desktop' }),
+  call('tools_load', { targets: ['pack:desktop'] }),
+  { text: 'done' },
+], ['Desktop pack disabled'])
+for (const turn of off) expect('control desktop: disabled tools are never offered', desktopTools(turn), [])
+contains('control desktop: disabled directory is absent', off[1].lastContent, 'No such path: /device/desktop')
+contains('control desktop: disabled pack cannot load', off[2].lastContent, /skipped pack:desktop:/)
+}
+if (include('control-desktop-main')) {
+console.log('# control-desktop profile')
+writeFileSync(fakeDesktopLog, '')
+const dt = await run('control-desktop', 'control-desktop-main', [
+  call('tools_ls', { path: '/' }),                                               // 0
+  call('tools_load', { targets: ['pack:desktop'] }),                              // 1
+  call('desktop_windows', { host: 'example' }),                                  // 2
+  call('desktop_windows', { host: 'example-wayland' }),                          // 3
+  call('desktop_screen', { host: 'example-wayland' }),                           // 4
+  call('desktop_clipboard_get', { host: 'example' }),                            // 5
+  call('desktop_click', { host: 'example', x: 10, y: 20 }),                       // 6 refused before probing
+  call('desktop_type', { host: 'example-wayland', text: "Example's $(id); text" }), // 7 refused
+  call('desktop_key', { host: 'example', combo: 'Return' }),                     // 8 refused
+  call('desktop_focus', { host: 'example-wayland', window: '42' }),             // 9 refused
+  call('desktop_clipboard_set', { host: 'example', text: 'Example text' }),      // 10 refused
+  call('desktop_windows', { host: 'unknown-example' }),                         // 11 unknown alias
+  { text: 'done' },                                                              // 12
+], ['Remote desktop control'])
+expect('control desktop: tools start hidden', desktopTools(dt[0]), [])
+expect('control desktop: pack loads all eight tools', desktopTools(dt[2]), DESKTOP)
+contains('control desktop: X11 native list via configured host', dt[3].lastContent, 'Example X11 window', '0x0000002a', '"focused":true')
+contains('control desktop: Wayland native list via another host', dt[4].lastContent, 'Example Wayland window', '"id":"42"', '"focused":true')
+contains('control desktop: screenshot returns a local path', dt[5].lastContent, `screenshot: ${desktopOutputDir}`)
+const images = existsSync(desktopOutputDir) ? readdirSync(desktopOutputDir) : []
+check('control desktop: screenshot preserves PNG bytes', images.length === 1 && readFileSync(join(desktopOutputDir, images[0])).equals(desktopPng), images.join(','))
+contains('control desktop: clipboard read runs', dt[6].lastContent, 'Example desktop clipboard')
+for (let i = 7; i <= 11; i++) contains('control desktop: mutation refused without approval channel', dt[i].lastContent, /approval/i)
+contains('control desktop: unknown aliases are errors', dt[12].lastContent, 'Unknown host "unknown-example"')
+const seen = readFileSync(fakeDesktopLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+check('control desktop: exactly four permitted reads with their probes reached SSH', seen.length === 8, JSON.stringify(seen.map((s) => s.argv.at(-1).slice(-120))))
+const desktopTargets = seen.map((s) => s.argv[s.argv.indexOf('--') + 1])
+const wantTargets = ['root@desktop.example', 'root@desktop.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'root@desktop.example', 'root@desktop.example']
+check('control desktop: reads target both configured machines in call order', JSON.stringify(desktopTargets) === JSON.stringify(wantTargets), JSON.stringify(desktopTargets))
+check('control desktop: root actions include a drop to the graphical UID', seen.filter((s) => s.argv.includes('root@desktop.example') && !s.argv.at(-1).includes('# DSH_DESKTOP_PROBE_V2')).every((s) => s.argv.at(-1).includes('--reuid') && s.argv.at(-1).includes('--init-groups')), 'root actions must not execute graphical utilities as UID 0')
 }
 
 // --- llm profile: small-model classification, cached --------------------------
