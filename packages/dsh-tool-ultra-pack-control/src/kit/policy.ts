@@ -1,0 +1,103 @@
+// Small pure helpers shared by the control tools: shell quoting for the remote
+// side, secret redaction, output capping and the read-only command check.
+
+/** Single-quote a string for a POSIX shell. */
+export function shq(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+const SECRET_ASSIGNMENT = /\b([A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)[A-Za-z0-9_.-]*)(\s*[=:]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/gi
+const PEM_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g
+
+/** Hide private keys and `name=value` secrets in text that may reach a model or a log. */
+export function redact(text: string): string {
+  return text.replace(PEM_BLOCK, '[private key removed]').replace(SECRET_ASSIGNMENT, '$1$2***')
+}
+
+/** Keep the start and the end of long output, with a note about the middle. */
+export function capText(text: string, max: number): string {
+  if (text.length <= max) return text
+  const head = Math.ceil(max * 0.6)
+  const tail = max - head
+  return `${text.slice(0, head)}\n[... ${text.length - max} characters omitted ...]\n${text.slice(text.length - tail)}`
+}
+
+/** An integer argument clamped to [min, max]; `fallback` when it is missing or not a number. */
+export function intArg(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Math.trunc(Number(value))
+  return Number.isFinite(n) && value !== undefined && value !== null && value !== '' ? Math.min(max, Math.max(min, n)) : fallback
+}
+
+// --- read-only commands ------------------------------------------------------------------
+//
+// A command that may run without asking must be plainly harmless: only characters
+// that cannot start a second command, a redirect, a substitution or a glob, a first
+// word from a short list, and no option that makes the program write. Anything else
+// is "not known to be read-only", which is not the same as "dangerous".
+
+const SAFE_CHARS = /^[A-Za-z0-9 _./:=@%+,-]+$/
+const SYSTEMCTL_READ = new Set(['status', 'is-active', 'is-enabled', 'is-failed', 'show', 'cat', 'list-units', 'list-unit-files', 'list-timers'])
+const JOURNALCTL_FLAGS = new Set(['-u', '--unit', '-n', '--lines', '-b', '--boot', '-p', '--priority', '-r', '--reverse', '-k', '--dmesg', '-e', '--no-pager', '-o', '--output', '--since', '--until', '--system', '--user', '-x'])
+const SIMPLE = new Set(['ls', 'cat', 'head', 'tail', 'pwd', 'uname', 'uptime', 'whoami', 'id', 'df', 'free', 'du', 'lsblk', 'lsusb', 'lspci', 'nixos-version', 'stat', 'wc', 'which', 'file', 'nproc'])
+// `hostname NAME` and `date -s` change the machine, so those two take no arguments of that kind.
+const DATE_ARGS = new Set(['-u', '--utc', '-R', '--rfc-email'])
+// A follower never ends.
+const REJECT_ARG = /^(-f|-F|--follow)$/
+
+/**
+ * True when `cmd` is known to only read. `deny` are path patterns (see DEFAULT_DENY_PATHS):
+ * a command that names such a path is not auto-approved, so the approval path is not a
+ * way around the read tools' own refusal.
+ */
+export function isReadOnlyCommand(cmd: string, deny: readonly RegExp[] = []): boolean {
+  const text = cmd.trim()
+  if (!text || text.length > 300 || !SAFE_CHARS.test(text)) return false
+  const [first, ...rest] = text.split(/ +/)
+  if (rest.some((w) => REJECT_ARG.test(w))) return false
+  // `..` can leave the directory a word seems to name, so it is never auto-approved.
+  if (rest.some((w) => w.split('/').includes('..'))) return false
+  if (rest.some((w) => w.includes('/') && isDeniedPath(w, deny))) return false
+  if (SIMPLE.has(first)) return true
+  if (first === 'hostname') return rest.length === 0
+  if (first === 'date') return rest.every((w) => w.startsWith('+') || DATE_ARGS.has(w))
+  if (first === 'systemctl') {
+    const sub = rest.find((w) => !w.startsWith('-'))
+    return sub !== undefined && SYSTEMCTL_READ.has(sub) && rest.every((w) => !w.startsWith('-') || ['--no-pager', '--failed', '--all', '-a', '--type', '-t', '--state', '--property', '-p', '--user', '--system', '-l', '--full'].includes(w.split('=')[0]))
+  }
+  if (first === 'journalctl') return rest.every((w) => !w.startsWith('-') || JOURNALCTL_FLAGS.has(w.split('=')[0]))
+  return false
+}
+
+// --- paths ---------------------------------------------------------------------------------
+
+/** Remote files a read tool refuses by default: credentials and process secrets. Not a security boundary (symlinks get around it); a guard against asking a model to read them by accident. */
+export const DEFAULT_DENY_PATHS: readonly string[] = [
+  '^/etc/g?shadow-?$',
+  '(^|/)\\.ssh/(id_[^/]*|authorized_keys)$',
+  '^/etc/ssh/ssh_host_[^/]*_key$',
+  '^/proc/[^/]+/environ$',
+]
+
+/** Collapse `.` and `..` segments of an absolute or relative POSIX path. */
+export function normalizePosix(path: string): string {
+  const absolute = path.startsWith('/')
+  const out: string[] = []
+  for (const part of path.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (out.length && out[out.length - 1] !== '..') out.pop()
+      else if (!absolute) out.push('..')
+    } else out.push(part)
+  }
+  return (absolute ? '/' : '') + out.join('/')
+}
+
+/**
+ * Does the path match one of the deny patterns? The path is made absolute and
+ * normalized first (a relative path is taken from `/`, since the remote working
+ * directory is not known here), so `..`, `.` and doubled slashes cannot hide it.
+ */
+export function isDeniedPath(path: string, deny: readonly RegExp[]): boolean {
+  const normal = normalizePosix(path.startsWith('/') ? path : `/${path}`)
+  return deny.some((re) => re.test(normal))
+}
