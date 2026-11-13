@@ -75,12 +75,17 @@ export function apply(ctx: ExtensionContext, config: RiskGateConfig = {}) {
   // { "<session id>": ["merge_pull_request", ...] | "*" }
   const allow: Record<string, AllowSpec> = config.allow ?? {}
 
+  /** Is this tool high-risk? Catalog declaration first, then the configured list. */
+  function isRisky(catalog: Catalog | undefined, toolName: string): boolean {
+    const tool = catalog?.tools?.get(toolName)
+    return Boolean(tool?.highRisk) || extraHighRisk.has(toolName) || extraHighRisk.has(shortOf(toolName))
+  }
+
   /** High-risk tools among the given names: catalog declaration first. */
   function riskyAmong(catalog: Catalog | undefined, names: Iterable<string>): string[] {
     const risky: string[] = []
     for (const toolName of names) {
-      const tool = catalog?.tools?.get(toolName)
-      if (tool?.highRisk || extraHighRisk.has(toolName) || extraHighRisk.has(shortOf(toolName))) risky.push(toolName)
+      if (isRisky(catalog, toolName)) risky.push(toolName)
     }
     return risky
   }
@@ -101,12 +106,15 @@ export function apply(ctx: ExtensionContext, config: RiskGateConfig = {}) {
 
   /** Tools a tools_load call would add, resolved against the caller's catalog. */
   function targetsOf(agent: Agent | undefined, args: PreExecute['arguments']): string[] {
+    const catalog = ctx.toolCatalog.get(agent)
     const names = new Set<string>()
     for (const raw of args?.targets ?? []) {
       const node = ctx.toolCatalog.resolve(raw, agent)
       if (node?.kind === 'tool') names.add(node.tool.name)
-      else if (node?.kind === 'group') for (const tool of node.group.tools) names.add(tool.name)
-      else if (node?.kind === 'category') for (const group of node.category.groups) for (const tool of group.tools) names.add(tool.name)
+      // Group and category loads skip high-risk tools (they load one at a
+      // time), so only the tools that would actually be loaded count here.
+      else if (node?.kind === 'group') for (const tool of node.group.tools.filter((t) => !isRisky(catalog, t.name))) names.add(tool.name)
+      else if (node?.kind === 'category') for (const group of node.category.groups) for (const tool of group.tools.filter((t) => !isRisky(catalog, t.name))) names.add(tool.name)
     }
     return [...names]
   }

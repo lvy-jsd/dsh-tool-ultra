@@ -178,10 +178,10 @@ test('risk gate: config can add a tool, defaultHighRisk:false can drop the built
   assert.equal((await runGate(only.listeners, { name: 'tools_load', agent: agent('s1'), arguments: { targets: ['my_custom_danger'] } })).kind, 'ask')
 })
 
-test('risk gate: group loads ask when the group contains a high-risk tool', async () => {
+test('risk gate: group loads do not ask, the core skips the group\'s high-risk tools', async () => {
   const { listeners } = gateCtx({})
   const decision = await runGate(listeners, { name: 'tools_load', agent: agent('s1'), arguments: { targets: ['/some/group'] } })
-  assert.equal(decision.kind, 'ask')
+  assert.deepEqual(decision, { kind: 'allow' })
 })
 
 test('risk gate: per-session allowlist skips the prompt', async () => {

@@ -1,10 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { coreHost } from './panel-core-host.mjs'
+import { closestNames } from '../../packages/dsh-tool-ultra-core/lib/catalog.js'
 
 // "Did you mean" hints for tools_ls / tools_load / tools_find when a path or
-// tool name does not exist: at most 3 closest names (edit distance or prefix,
-// case-insensitive, Chinese included), and no hint for an unrelated query.
+// tool name does not exist: at most 3 closest names (optimal string alignment
+// distance or prefix, case-insensitive, Chinese included), and no hint for an
+// unrelated query.
 
 function setup(t) {
   const host = coreHost(t)
@@ -49,6 +51,21 @@ test('tools_ls on a misspelled path suggests the closest names', async (t) => {
   const result = await execute('tools_ls', { path: '/uncategorizd' })
   assert.match(result, /No such path/)
   assert.match(result, /Did you mean: uncategorized/)
+})
+
+test('a transposed letter in a tools_ls path suggests the closest name', async (t) => {
+  const { ctx, catalog, execute } = setup(t)
+  ctx.tools.register({ name: 'memory_store', description: 'memory_store', parameters: {} })
+  catalog.annotate('memory_store', { group: 'memory', category: 'memory' })
+  catalog.refresh()
+  const result = await execute('tools_ls', { path: '/memroy' })
+  assert.match(result, /No such path/)
+  assert.match(result, /Did you mean: memory/)
+})
+
+test('a transposed letter in a tool name is suggested', () => {
+  const catalog = { tools: new Map([['tools_load', { name: 'tools_load', short: 'tools_load' }]]) }
+  assert.deepEqual(closestNames(catalog, 'tools_lod'), ['tools_load'])
 })
 
 test('tools_ls on an unrelated path gets no suggestion', async (t) => {
