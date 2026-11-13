@@ -12,7 +12,7 @@ export function observedExec(exec: Exec): Exec {
     const result = await exec(argv, options)
     const scope = calls.getStore()
     // An owned tunnel is intentionally killed after its callback finishes.
-    if (scope && !options?.keepStdinOpen && (result.code !== 0 || result.timedOut)) scope.failed = true
+    if (scope && !options?.keepStdinOpen && !options?.allowFailure && (result.code !== 0 || result.timedOut)) scope.failed = true
     return result
   }
 }

@@ -8,7 +8,7 @@ import { localExec, type Exec, type ExecOptions, type ExecResult } from './kit/e
 import { DEFAULT_DENY_PATHS, capText, intArg, isDeniedPath, isReadOnlyCommand, redact, shq } from './kit/policy.js'
 import { readTransfer } from './kit/files.js'
 import { COMMON_DEFAULTS, checkCommonConfig, configBoolean, configInteger, configObject, configText, type CommonConfig } from './kit/config.js'
-import { sessionKey } from './kit/scope.js'
+import { markFailed, sessionKey } from './kit/scope.js'
 import type { ToolSpec } from './kit/spec.js'
 
 export const ADB_TOOL_NAMES = ['adb_devices', 'adb_info', 'adb_screen', 'adb_ui', 'adb_tap', 'adb_input', 'adb_app', 'adb_logcat'] as const
@@ -170,12 +170,16 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
     // root prefers KernelSU `su -c sh`. If su is missing and adbd is already
     // uid 0 (typical for a root wireless adbd), the same script runs there.
     // Never invoke `adb root` or `adb unroot`.
-    const run = (useSu: boolean) => onDevice(value, ['shell', '-T', ...(useSu ? ['su', '-c', 'sh'] : ['sh'])], { ...extra, stdin: `${script}\n` })
+    const run = (useSu: boolean, extraExec: ExecOptions = {}) => onDevice(value, ['shell', '-T', ...(useSu ? ['su', '-c', 'sh'] : ['sh'])], { ...extra, ...extraExec, stdin: `${script}\n` })
     if (!root) return run(false)
-    const first = await run(true)
-    if (!suUnavailable(first)) return first
-    const id = await onDevice(value, ['shell', '-T', 'sh'], { stdin: 'id -u\n', timeoutMs: 15_000, maxBytes: 4000 })
+    const first = await run(true, { allowFailure: true })
+    if (!suUnavailable(first)) {
+      if (first.code !== 0 || first.timedOut) markFailed()
+      return first
+    }
+    const id = await onDevice(value, ['shell', '-T', 'sh'], { stdin: 'id -u\n', timeoutMs: 15_000, maxBytes: 4000, allowFailure: true })
     if (id.code === 0 && !id.timedOut && id.stdout.trim() === '0') return run(false)
+    markFailed()
     return first
   }
 

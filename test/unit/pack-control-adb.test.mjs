@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import {
   ADB_ROOT_TOOL_NAMES, ADB_TOOL_NAMES, TOOL_NAMES, apply, checkSerial, createTools, gate, parseUiDump, shq,
 } from '../../packages/dsh-tool-ultra-pack-control/lib/index.js'
+import { inCall, observedExec } from '../../packages/dsh-tool-ultra-pack-control/lib/kit/scope.js'
 import { DEFAULT_GROUP_CATEGORIES, rulesClassifier } from '../../packages/dsh-tool-ultra-classifier-rules/lib/index.js'
 
 const XML = readFileSync(new URL('../fixtures/pack-control/ui.xml', import.meta.url), 'utf8')
@@ -256,6 +257,33 @@ test('adb: a command exit 127 after su starts is not treated as a missing su bin
   assert.match(out, /definitely-missing/)
   assert.doesNotMatch(out, /should-not-fallback/)
   assert.equal(commands(f).length, 1)
+})
+
+test('adb: a successful already-root fallback is not reported as a transport failure', async () => {
+  const f = fake((argv, options) => {
+    if (argv.includes('su')) return ok('', { code: 127, stderr: '/system/bin/sh: su: inaccessible or not found\n' })
+    if (options.stdin === 'id -u\n') return ok('0\n')
+    return ok('uid=0(root)\n')
+  })
+  const t = tools({ exec: observedExec(f.exec) })
+  const scope = { session: 'example-session', failed: false }
+  const out = await inCall(scope, () => t.adb_shell.execute(deviceArgs({ cmd: 'id', root: true })))
+  assert.match(out, /uid=0\(root\)/)
+  assert.equal(scope.failed, false)
+})
+
+test('adb: a missing su on an unprivileged adbd still marks the call failed', async () => {
+  const f = fake((argv, options) => {
+    if (argv.includes('su')) return ok('', { code: 127, stderr: '/system/bin/sh: su: inaccessible or not found\n' })
+    if (options.stdin === 'id -u\n') return ok('2000\n')
+    return ok('should-not-run\n')
+  })
+  const t = tools({ exec: observedExec(f.exec) })
+  const scope = { session: 'example-session', failed: false }
+  const out = await inCall(scope, () => t.adb_shell.execute(deviceArgs({ cmd: 'id', root: true })))
+  assert.match(out, /inaccessible or not found/)
+  assert.doesNotMatch(out, /should-not-run/)
+  assert.equal(scope.failed, true)
 })
 
 test('adb: root calls always ask despite allow, conservative non-root reads skip, and input asks by default', () => {
