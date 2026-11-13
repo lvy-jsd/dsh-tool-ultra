@@ -180,7 +180,11 @@ paths must be absolute without `.`/`..` segments, control characters or a traili
 slash, and inherit `denyPaths` and the SSH packs' credential-path guard. Remote symlinks
 and a privileged shell can bypass path guards; this is not a filesystem sandbox.
 Screenshots use unique names in `outputDir` (default `<transferDir>/screens`).
-New local files have mode 0600, newly created directories 0700.
+New local files have mode 0600, newly created directories 0700 on POSIX systems;
+Windows access is governed by the directory's ACLs instead of these POSIX mode bits.
+Local sources are checked with `lstat` before and after opening and matched to the
+opened file's identity before reading. `O_NOFOLLOW` additionally rejects links
+atomically where available; the `lstat` checks also apply when it is unavailable.
 
 `maxTransferBytes` (default 50 MB) bounds files and screenshots; truncated binary
 output is never saved. `maxBytes` (default 2 MB) bounds each text stream/UI dump,

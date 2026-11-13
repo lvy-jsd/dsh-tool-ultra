@@ -243,7 +243,7 @@ test('adb: binary screenshots save private unique PNG files and reject partial/e
   const second = (await t.adb_screen.execute(deviceArgs())).slice('screenshot: '.length)
   assert.notEqual(first, second)
   assert.deepEqual(await readFile(first), png)
-  assert.equal((await stat(first)).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal((await stat(first)).mode & 0o777, 0o600)
   assert.equal(commands(f).at(-1).options.stdin, 'exec screencap -p\n')
   assert.equal(commands(f).at(-1).options.maxBytes, 101)
   for (const extra of [{ truncated: true }, { stdoutBytes: Buffer.alloc(101) }, { stdoutBytes: Buffer.from('not png') }]) {
@@ -295,8 +295,10 @@ test('adb: push and install use bounded private copies, refuse symlinks/traversa
     staged.push(path)
     assert.notEqual(dirname(path), dir)
     assert.ok(path.endsWith('example.bin') || path.endsWith('example.apk'), 'staging preserves the name for adb directory destinations')
-    assert.equal((await stat(path)).mode & 0o777, 0o600)
-    assert.equal((await stat(dirname(path))).mode & 0o777, 0o700)
+    if (process.platform !== 'win32') {
+      assert.equal((await stat(path)).mode & 0o777, 0o600)
+      assert.equal((await stat(dirname(path))).mode & 0o777, 0o700)
+    }
     return ok(await readFile(path))
   })
   const t = tools({ exec: f.exec, transferDir: dir, maxTransferBytes: 100 })
@@ -311,8 +313,21 @@ test('adb: push and install use bounded private copies, refuse symlinks/traversa
     await assert.rejects(t.adb_push.execute(deviceArgs({ local, remote })), /plain local/)
     await assert.rejects(t.adb_install.execute(deviceArgs({ apk: local })), /plain local/)
   }
-  await symlink(join(dir, 'example.bin'), join(dir, 'link'))
-  await assert.rejects(t.adb_push.execute(deviceArgs({ local: 'link', remote })), /ELOOP/)
+  await ctx.test('symlink sources are refused before push or install', async (sub) => {
+    try {
+      await symlink(join(dir, 'example.bin'), join(dir, 'link.apk'))
+    } catch (e) {
+      if (process.platform === 'win32' && ['EPERM', 'EACCES', 'ENOSYS', 'ENOTSUP'].includes(e.code)) {
+        sub.skip(`Windows cannot create symlinks here: ${e.code}`)
+        return
+      }
+      throw e
+    }
+    const seen = f.calls.length
+    await assert.rejects(t.adb_push.execute(deviceArgs({ local: 'link.apk', remote })), /symlinks are not allowed|ELOOP/)
+    await assert.rejects(t.adb_install.execute(deviceArgs({ apk: 'link.apk' })), /symlinks are not allowed|ELOOP/)
+    assert.equal(f.calls.length, seen, 'refused symlinks never reach adb')
+  })
   await mkdir(join(dir, 'directory'))
   await assert.rejects(t.adb_push.execute(deviceArgs({ local: 'directory', remote })), /regular file/)
   await assert.rejects(t.adb_install.execute(deviceArgs({ apk: 'example.bin' })), /\.apk/)
