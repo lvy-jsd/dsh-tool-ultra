@@ -302,14 +302,17 @@ if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
     sshBin: ${fakeDesktopSsh}
     multiplex: false
     desktopCacheMs: 0
-    allow: ${profile === 'control-desktop-niri' ? "{ '*': [desktop_focus, desktop_click, desktop_type, desktop_key] }" : '{}'}
+    allow: {}
     outputDir: ${desktopOutputDir}
     auditFile: ${join(root, 'control-desktop-audit.jsonl')}
     hosts:
       example: { target: 'root@desktop.example' }
       example-wayland: { target: 'user@wayland.example' }
       example-niri: { target: 'user@niri.example' }
-`)
+${profile === 'control-desktop-niri' ? `- id: tm-testkit
+  name: dsh-tm-testkit
+  config: { approveTools: [desktop_focus, desktop_click, desktop_type, desktop_key] }
+` : ''}`)
 }
 
 // Each forwarding invocation starts a local fake CDP server in the fake SSH
@@ -682,7 +685,7 @@ const ad = await run('control-adb', 'control-adb-main', [
 ], ['Android control'])
 expect('control adb: enabled tools start hidden', controlAdbTools(ad[0]), [])
 expect('control adb: pack:adb loads exactly observation and input tools', controlAdbTools(ad[2]), ADB_READ_INPUT)
-contains('control adb: adb_ui parses XML from the fake client', ad[3].lastContent, '[1] Button "设置 & Tools" (120,140)', '[2] ImageButton "Search \\"apps\\"" (950,150)')
+contains('control adb: adb_ui parses XML from the fake client', (() => { try { return JSON.parse(ad[3].lastContent).content } catch { return ad[3].lastContent } })(), '[1] Button "设置 & Tools" (120,140)', '[2] ImageButton "Search \\"apps\\"" (950,150)')
 expect('control adb: adb_shell loads before its call-time gate is tested', controlAdbTools(ad[4]), [...ADB_READ_INPUT, 'adb_shell'])
 contains('control adb: root shell is refused without an approval channel', ad[5].lastContent, /approval/i)
 const adbSeen = readFileSync(fakeAdbLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -795,7 +798,7 @@ check('control desktop: root actions include a drop to the graphical UID', seen.
 }
 
 if (include('control-desktop-niri')) {
-console.log('# control-desktop niri profile (explicitly allowlisted input)')
+console.log('# control-desktop niri profile (input approved once through the DSH approval service)')
 writeFileSync(fakeDesktopLog, '')
 const nt = await run('control-desktop-niri', 'control-desktop-niri', [
   call('tools_load', { targets: ['pack:desktop'] }),
@@ -810,7 +813,9 @@ const nt = await run('control-desktop-niri', 'control-desktop-niri', [
 contains('control niri: native focus and workspace-view geometry', nt[2].lastContent, 'Example niri window', '"focused":true', '"x":12', 'workspace-view logical pixels')
 contains('control niri: screenshot path accompanies image', nt[3].lastToolContent, `screenshot: ${desktopOutputDir}`)
 check('control niri: image reaches model request', nt[3].images?.some((i) => i.image && i.bytes > 8), JSON.stringify(nt[3].images))
-for (const [index, expected] of [[4, 'focused 42'], [5, 'clicked 12,22'], [6, 'typed'], [7, 'sent desktop key combo']]) contains('control niri: explicitly allowed input runs', nt[index].lastContent, expected)
+for (const [index, expected] of [[4, 'focused 42'], [5, 'clicked 12,22'], [6, 'typed'], [7, 'sent desktop key combo']]) contains('control niri: approved input runs', nt[index].lastContent, expected)
+const approvedEvents = readFileSync(join(root, 'control-desktop-audit.jsonl'), 'utf8').split('\n').filter(Boolean).map((s) => JSON.parse(s)).filter((r) => r.event === 'approved').map((r) => r.tool)
+check('control niri: each input was approved once through DSH approval', JSON.stringify(approvedEvents) === JSON.stringify(['desktop_focus', 'desktop_click', 'desktop_type', 'desktop_key']), JSON.stringify(approvedEvents))
 const calls = readFileSync(fakeDesktopLog, 'utf8').trim().split('\n').filter(Boolean).map((s) => JSON.parse(s))
 check('control niri: six calls plus probes all reach niri host', calls.length === 12 && calls.every((s) => s.argv.includes('user@niri.example')), JSON.stringify(calls.map((s) => s.argv.at(-1).slice(-100))))
 const actions = calls.filter((s) => !s.argv.at(-1).includes('# DSH_DESKTOP_PROBE_V2'))
