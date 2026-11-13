@@ -1,6 +1,6 @@
 # @lvy-jsd/dsh-tool-ultra-pack-control
 
-SSH, Android, remote Linux desktop and browser control for [Tool Ultra](https://github.com/lvy-jsd/dsh-tool-ultra). Models select configured aliases rather than addresses. The package uses system clients, adds no npm dependencies, and requires Node 22 or newer.
+SSH, Android, remote Linux desktop and browser control for [Tool Ultra](https://github.com/lvy-jsd/dsh-tool-ultra), plus a standalone read-only MCP server. Models select configured aliases rather than addresses. The package uses system clients and requires Node 22 or newer. The MCP config loader uses `js-yaml`; the control transports add no npm dependencies.
 
 | Pack | Default | Scope |
 | --- | --- | --- |
@@ -212,7 +212,7 @@ Panel entries show configuration, not a claim that a device is reachable.
 | --- | --- | --- | --- |
 | `adb_devices` | low | No | List only configured aliases/devices and connection states; no arguments |
 | `adb_info` | low | No | Model, Android version, battery, foreground app and lock indicators |
-| `adb_screen` | low | No | Save a private PNG in `outputDir`; open with `read_image` |
+| `adb_screen` | low | No | Save a private PNG in `outputDir` and attach it through the adapter |
 | `adb_ui` | low | No | Numbered UI elements and center coordinates |
 | `adb_tap` | medium | Conditional | Tap `target`: recent number, `text:LABEL` or `x,y` |
 | `adb_input` | medium | Conditional | `kind` text/key/swipe and `value`; asks by default |
@@ -550,9 +550,9 @@ client; it cannot guarantee an already-started remote action was cancelled.
 ## Remote browser: `browser`
 
 This opt-in pack controls Chrome/Chromium **on each configured remote host** via
-CDP over SSH. It never connects to a browser on the DSH computer. Node **22 or
-newer**, its built-in `WebSocket`, and OpenSSH are required; no npm dependencies
-are added. Browser tools work with the SSH/desktop packs disabled.
+CDP over SSH. It never connects to a browser on the DSH computer. The transport
+uses Node **22 or newer**, its built-in `WebSocket`, and OpenSSH. Browser tools
+work with the SSH/desktop packs disabled.
 
 On the **remote machine**, manually run this in the graphical user's session
 (adjust the executable/port for that host):
@@ -696,10 +696,10 @@ Text/eval truncation keeps valid outer JSON; the nested content string may
 contain an incomplete representation of page data. Refs precede body text to
 keep the actionable list visible under the output cap.
 
-## Screenshot images sent to the model (desktop and browser)
+## Screenshot images sent to the model (Android, desktop and browser)
 
-`desktop_screen` and `browser_shot` share the DSH adapter's image result path.
-Both first save the original bounded PNG privately. With a mounted DSH
+`adb_screen`, `desktop_screen` and `browser_shot` share the DSH adapter's image result path.
+All first save the original bounded PNG privately. With a mounted DSH
 `attachments` service, the adapter calls `attachments.saveImage` with the actual
 PNG bytes; DSH validates/normalizes and stores the image. The canonical result
 contains the text path and durable image reference. `defineTool.output.render`
@@ -724,9 +724,66 @@ still receive `screenshot: <path>`; image attachment is performed by the DSH
 adapter, not by the SSH/CDP transport. No additional capture or clipboard write
 is used for the image result.
 
+## Standalone read-only MCP server
+
+`pack-control-mcp --config /absolute/path/to/control.yml` serves MCP over stdio without a DSH installation. It accepts the **same plugin-entry list as [examples/control.yml](examples/control.yml)**, selecting exactly one entry named `@lvy-jsd/dsh-tool-ultra-pack-control`, or a bare mapping containing that entry's `config`. JSON is also accepted. Settings are read once at startup and validated by the existing `createTools` path; malformed enabled families stop startup. Restart the client/server after editing the file. Paths are literal, as in the DSH config.
+
+For example, save this as `/path/to/control.yml` (all hosts and paths here are placeholders):
+
+```yaml
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs: { ssh: true, ssh-exec: false, adb: false, desktop: false, browser: false }
+    hosts:
+      example:
+        target: 'reader@server.example.com'
+        packs: [ssh]
+    auditFile: /path/to/control-audit.jsonl
+```
+
+Install the package to make its bin available:
+
+```sh
+npm install -g @lvy-jsd/dsh-tool-ultra-pack-control
+pack-control-mcp --config /path/to/control.yml
+```
+
+Then register it in [Claude Code](https://code.claude.com/docs/en/mcp) or [Codex](https://developers.openai.com/codex/mcp/):
+
+```sh
+claude mcp add --transport stdio pack-control -- pack-control-mcp --config /path/to/control.yml
+codex mcp add pack-control -- pack-control-mcp --config /path/to/control.yml
+```
+
+For testing from a built checkout, replace `pack-control-mcp` after `--` with `node /path/to/dsh-tool-ultra/packages/dsh-tool-ultra-pack-control/lib/mcp-cli.js`. This uses the checked-out implementation before publication. Alternatively, Codex's `config.toml` entry is:
+
+```toml
+[mcp_servers.pack-control]
+command = "pack-control-mcp"
+args = ["--config", "/path/to/control.yml"]
+```
+
+Only whole tools with `risk: low`, **no `approve` function** and **no `alwaysAsk` rule** are registered. Enabled packs, host whitelists, family overrides and `disable` still apply. `readOnly: false`, `adbAskInput: false` and every form of `allow` **cannot add mutating or approval-requiring tools**. No MCP request changes this policy. Even the read-only forms of `ssh_run`, `adb_shell` and `adb_app` are unavailable because those tools also accept mutating arguments. `desktop_clipboard_get` is also never exposed over MCP: clipboards often hold passwords and MCP clients have no per-call approval. It remains available in the DSH desktop pack.
+
+| Family | Available when enabled |
+| --- | --- |
+| SSH | `ssh_hosts`, `ssh_sys`, `ssh_read`, `ssh_log` |
+| Android | `adb_devices`, `adb_info`, `adb_screen`, `adb_ui`, `adb_logcat` |
+| Desktop | `desktop_screen`, `desktop_windows` |
+| Browser | `browser_tabs`, `browser_page`, `browser_shot` |
+
+“Read-only” follows the existing observation-tool policy: it still allows transport setup (SSH/ADB connections), temporary UI dumps, local screenshots and audit appends. It exposes remote files, logs, screen and signed-in page data according to the existing configuration; remote content remains untrusted. Each stdio connection owns fresh tool instances and a server-generated session ID through the shared call scope. Client names and `_meta` cannot choose another session. Calls run serially, with shared transport-failure tracking, redaction and the same body-free JSONL audit/default audit path as DSH. `auditFile: ''` explicitly disables audit.
+
+Successful screenshots return text plus MCP `{ type: "image", mimeType: "image/png", data: "<base64 PNG>" }` content, retaining the private PNG path. No DSH attachment service is required. Image-read and transport failures return `isError: true`; base64 is never put inside text or audit records.
+
+The small protocol adapter implements the [newline-delimited stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports) and `initialize` → `notifications/initialized` → `tools/list` / `tools/call`, plus `ping`. It negotiates handshake versions `2024-11-05`, `2025-03-26`, `2025-06-18` and `2025-11-25`; an unknown version receives `2025-11-25` for the client to accept or disconnect. It does not implement the newer stateless lifecycle, HTTP, resources, prompts, tasks or approval/elicitation. Cancellation notifications do not interrupt running observations; existing operation timeouts still apply. Input frames are limited to 1 MiB, batches are refused, and stdout contains only JSON-RPC; diagnostics go to stderr. There is no MCP SDK dependency: the deliberately limited protocol surface is tested directly. The single added direct dependency, `js-yaml`, handles real YAML syntax (including the existing example's comments and flow mappings/lists), with duplicate keys and executable/custom tags rejected.
+
 ## Validation
 
 `test/unit/pack-control-*.test.mjs` covers approval replay/session binding, redaction, aliases, host whitelists and overrides, malformed configuration, file confinement, desktop session discovery/privilege drop and cache invalidation, Android UI references, browser isolated-world references and tunnel cleanup. Most cases inject fake runners. Browser listener/foreground-process and POSIX shell cases require permissions to bind/fork.
+
+`pack-control-mcp.test.mjs` covers the registration boundary, YAML loader, JSON Schema, protocol errors/framing, images, audit and trusted session scope without subprocesses. `pack-control-mcp-stdio.test.mjs` launches the real bin entry with a fake SSH executable and exercises initialize → list → call; it skips only when process creation is forbidden (or the POSIX fixture is unavailable on Windows). Run that file outside a restricted sandbox to verify the executable path.
 
 The e2e runner boots a throwaway DSH_HOME with fake clients/model. The core tier includes SSH reads/refusals plus SSH write/shell and ADB root/input execution through the real DSH approval service (the testkit answers Allow once). The full tier adds disabled-pack checks, one malformed enabled family at a time while another family executes, X11/Wayland screenshots, approved niri input, browser observation/refusal and approved navigation/key/eval. It verifies audit events, private forward arguments and image delivery. These tests never operate real hosts/devices; physical Wayland pointer alignment, real transport and host approval UI still need live validation.
 
@@ -740,7 +797,7 @@ If the sandbox cannot fork the test runner, supported Node versions can use `nod
 
 ## For other front ends
 
-`createTools(options)` returns plain objects (`name`, `pack`, `risk`, `description`, `parameters`, `approve`, `describe`, `execute`) with no DSH types in them, and `gate(specs, allow)` is the approval decision. The enforced adapter requires DSH to provide an execution token and approval service; hosts without them refuse calls requiring approval. These are low-level implementations, not an approval-enforcing endpoint. An adapter must enforce approval and provide trusted per-session scope; use the DSH `apply` adapter for the enforced boundary. Do not expose raw specs as an MCP server or bridge endpoint. `options.exec` replaces the process runner, which is how the tests run without a network.
+`createTools(options)` returns plain objects (`name`, `pack`, `risk`, `description`, `parameters`, `approve`, `describe`, `execute`) with no DSH types in them, and `gate(specs, allow)` is the approval decision. The DSH adapter requires an execution token and approval service for calls requiring approval. These specs are low-level implementations, not an approval-enforcing endpoint. Use `pack-control-mcp` for the enforced read-only MCP boundary, or DSH `apply` for interactive control. Do not expose raw specs as a server or bridge endpoint. `options.exec` replaces the process runner, which is how the tests run without a network.
 
 ## License
 
