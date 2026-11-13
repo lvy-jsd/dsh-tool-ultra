@@ -141,7 +141,7 @@ test('browser: screenshots, byte bounds and filesystem modes', async (ctx) => {
   const f = fake(), t = tools({ exec: f.exec, outputDir })
   const path = (await t.browser_shot.execute(args())).slice('screenshot: '.length)
   assert.deepEqual(await readFile(path), PNG)
-  assert.equal((await stat(path)).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal((await stat(path)).mode & 0o777, 0o600)
   f.browsers.example.screenshot = Buffer.from('not PNG').toString('base64')
   await assert.rejects(t.browser_shot.execute(args()), /not a PNG/)
   f.browsers.example.screenshot = PNG.toString('base64')
@@ -265,8 +265,25 @@ async function memory(ctx) {
   ctx.after(() => rm(outputDir, { recursive: true, force: true }))
   const t = tools({ exec, outputDir })
   const snapshot = async () => JSON.parse(await t.browser_page.execute(args({ mode: 'refs' }))).content.match(/"ref":"([^"]+)"/)[1]
-  return { browser, t, snapshot, active: () => active }
+  return { browser, t, snapshot, active: () => active, options: { ...config, exec, outputDir } }
 }
+
+test('browser: fake SSH/CDP screenshot reaches defineTool model output as an image attachment', async (ctx) => {
+  const { options, active } = await memory(ctx)
+  const registered = [], saved = []
+  const ref = { attachmentId: 'b'.repeat(64), mediaType: 'image/png', bytes: PNG.length, width: 1, height: 1 }
+  const store = { async saveImage(input) { saved.push(input); return ref } }
+  apply({ tools: { register: (t) => registered.push(t) }, get: () => store, on() {} }, { ...options, auditFile: '' })
+  const tool = registered.find((t) => t.name === 'browser_shot')
+  const value = await tool.execute(args())
+  const blocks = tool.output.render(args(), value)
+  assert.deepEqual(blocks.map((b) => b.type), ['text', 'image'])
+  assert.deepEqual(blocks[1], { type: 'image', attachment: ref })
+  assert.match(blocks[0].text, /screenshot: .*\.png/)
+  assert.deepEqual(saved[0].data, PNG)
+  assert.equal(saved[0].mediaType, 'image/png')
+  assert.equal(active(), 0)
+})
 
 test('browser: in-memory CDP exercises isolated snapshot, click/type, keys, eval and navigation', async (ctx) => {
   const { browser, t, snapshot, active } = await memory(ctx)

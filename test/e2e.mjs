@@ -67,7 +67,7 @@ const profileNeeds = {
   'attr-rules': ['attr-rules-main'], exempt: ['exempt-main'], gate: ['gate-main'],
   cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'],
   control: ['control-main', 'control-adb-disabled', 'control-desktop-disabled', 'control-browser-disabled'], 'control-adb': ['control-adb-main'],
-  'control-desktop': ['control-desktop-main'], 'control-browser': ['control-browser-main'],
+  'control-desktop': ['control-desktop-main'], 'control-desktop-niri': ['control-desktop-niri'], 'control-browser': ['control-browser-main'],
 }
 const needProfile = (name) => profileNeeds[name].some(include)
 
@@ -101,7 +101,7 @@ function makeProfile(name, bundles, extraPatch = '') {
         api: openai-completions
         baseURL: http://127.0.0.1:${port}/v1
         models:
-          - { id: fake-1, name: Fake 1, contextWindow: 131072, maxTokens: 4096, reasoningEfforts: false }
+          - { id: fake-1, name: Fake 1, contextWindow: 131072, maxTokens: 4096, reasoningEfforts: false, input: [text, image] }
 - id: agent-default-model
   name: '@deepseek-ai/dsh-agent-default-model'
   config: { provider: fake, model: fake-1 }
@@ -253,17 +253,17 @@ const fakeDesktopSsh = join(root, 'fake-desktop-ssh.mjs')
 const fakeDesktopLog = join(root, 'fake-desktop-ssh.jsonl')
 const desktopOutputDir = join(root, 'desktop-screens')
 const desktopPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGoAAAAASUVORK5CYII=', 'base64')
-if (needProfile('control-desktop')) {
+if (needProfile('control-desktop') || needProfile('control-desktop-niri')) {
   writeFileSync(fakeDesktopSsh, `#!${process.execPath}
 import { appendFileSync, readFileSync } from 'node:fs'
 const argv = process.argv.slice(2), remote = argv.at(-1), stdin = readFileSync(0, 'utf8')
 const target = argv[argv.indexOf('--') + 1]
 appendFileSync(${JSON.stringify(fakeDesktopLog)}, JSON.stringify({ argv, stdin }) + '\\n')
-const kind = target === 'root@desktop.example' ? 'x11' : target === 'user@wayland.example' ? 'sway' : null
+const kind = target === 'root@desktop.example' ? 'x11' : target === 'user@wayland.example' ? 'sway' : target === 'user@niri.example' ? 'niri' : null
 if (!kind) throw new Error('Unexpected fake SSH destination')
 if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
   const b64 = (s) => Buffer.from(s).toString('base64')
-  const env = kind === 'x11' ? { DISPLAY: ':0', XAUTHORITY: '/run/user/1000/example.Xauthority', XDG_SESSION_ID: 'example-session' } : { WAYLAND_DISPLAY: 'wayland-1', XDG_RUNTIME_DIR: '/run/user/1000', SWAYSOCK: '/run/user/1000/sway-ipc.example.sock' }
+  const env = kind === 'x11' ? { DISPLAY: ':0', XAUTHORITY: '/run/user/1000/example.Xauthority', XDG_SESSION_ID: 'example-session' } : kind === 'niri' ? { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-1', XDG_RUNTIME_DIR: '/run/user/1000', XDG_SESSION_TYPE: 'wayland', XDG_CURRENT_DESKTOP: 'niri', NIRI_SOCKET: '/run/user/1000/niri.wayland-1.example.sock' } : { WAYLAND_DISPLAY: 'wayland-1', XDG_RUNTIME_DIR: '/run/user/1000', SWAYSOCK: '/run/user/1000/sway-ipc.example.sock' }
   process.stdout.write(['DSH_DESKTOP_V2', 'I\\t' + (kind === 'x11' ? '0' : '1000'),
     'U\\t' + b64('root:0:0:/root\\nexample:1000:1000:/home/example'),
     'L\\texample-session\\t' + b64('User=1000\\nActive=yes\\nType=' + (kind === 'x11' ? 'x11' : 'wayland') + '\\nClass=user\\nState=active'),
@@ -275,6 +275,12 @@ if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
   process.stdout.write(JSON.stringify({ type: 'root', nodes: [{ type: 'con', id: 42, app_id: 'example.app', name: 'Example Wayland window', focused: true }] }))
 } else if (remote.includes('getactivewindow')) {
   process.stdout.write('42\\n0x0000002a 0 example.App desktop.example Example X11 window\\n')
+} else if (kind === 'niri' && remote.includes('focused-window')) {
+  process.stdout.write(JSON.stringify({ windows: [{ id: 42, title: 'Example niri window', app_id: 'example.app', workspace_id: 1, layout: { tile_pos_in_workspace_view: [10,20], window_offset_in_tile: [2,2], window_size: [400,300], tile_size: [404,304] } }], active: { id: 42 } }))
+} else if (kind === 'niri' && remote.includes('Missing remote command: ydotool.')) {
+  if (!remote.includes('/run/ydotoold/socket') || remote.includes('Missing remote command: wtype.') || remote.includes('Missing remote command: xdotool.')) throw Error('niri must use ydotool with automatic socket discovery')
+} else if (kind === 'niri' && remote.includes('focus-window')) {
+  // Focus succeeds; the assertion below checks the quoted native id.
 } else if (remote.includes('Missing remote command: scrot.') || remote.includes('Missing remote command: grim.')) {
   process.stdout.write(Buffer.from(${JSON.stringify(desktopPng.toString('base64'))}, 'base64'))
 } else if (remote.includes('Missing remote command: wl-paste.') || remote.includes('Missing remote command: xclip.')) {
@@ -284,7 +290,7 @@ if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
   process.exitCode = 1
 }
 `, { mode: 0o755 })
-  makeProfile('control-desktop', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
+  for (const profile of ['control-desktop', 'control-desktop-niri'].filter(needProfile)) makeProfile(profile, ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
 - id: tool-manager-risk-gate
   name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
   config:
@@ -296,11 +302,13 @@ if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
     sshBin: ${fakeDesktopSsh}
     multiplex: false
     desktopCacheMs: 0
+    allow: ${profile === 'control-desktop-niri' ? "{ '*': [desktop_focus, desktop_click, desktop_type, desktop_key] }" : '{}'}
     outputDir: ${desktopOutputDir}
     auditFile: ${join(root, 'control-desktop-audit.jsonl')}
     hosts:
       example: { target: 'root@desktop.example' }
       example-wayland: { target: 'user@wayland.example' }
+      example-niri: { target: 'user@niri.example' }
 `)
 }
 
@@ -722,7 +730,8 @@ expect('control browser: enabled pack loads eight tools', browserTools(bt[2]), B
 contains('control browser: tabs arrive through the SSH CDP forward', bt[3].lastContent, 'tab-example', 'untrusted_browser_content')
 contains('control browser: refs snapshot is untrusted content', bt[4].lastContent, 'untrusted_browser_content', 'Example input', /[a-f0-9]{8}:1/)
 contains('control browser: another configured remote host works', bt[5].lastContent, 'Untrusted page', 'untrusted_browser_content')
-contains('control browser: screenshot saved locally', bt[6].lastContent, `screenshot: ${browserOutputDir}`)
+contains('control browser: screenshot saved locally', bt[6].lastToolContent, `screenshot: ${browserOutputDir}`)
+check('control browser: model request carries actual image content', bt[6].images?.some((i) => i.image && i.bytes > 8), JSON.stringify(bt[6].images))
 const images = existsSync(browserOutputDir) ? readdirSync(browserOutputDir) : []
 check('control browser: local PNG bytes preserved', images.length === 1 && readFileSync(join(browserOutputDir, images[0])).equals(desktopPng), images.join(','))
 for (const i of [7,8,9,10,12]) contains('control browser: every mutation needs a call approval channel', bt[i].lastContent, /approval/i)
@@ -770,7 +779,8 @@ expect('control desktop: tools start hidden', desktopTools(dt[0]), [])
 expect('control desktop: pack loads all eight tools', desktopTools(dt[2]), DESKTOP)
 contains('control desktop: X11 native list via configured host', dt[3].lastContent, 'Example X11 window', '0x0000002a', '"focused":true')
 contains('control desktop: Wayland native list via another host', dt[4].lastContent, 'Example Wayland window', '"id":"42"', '"focused":true')
-contains('control desktop: screenshot returns a local path', dt[5].lastContent, `screenshot: ${desktopOutputDir}`)
+contains('control desktop: screenshot returns a local path', dt[5].lastToolContent, `screenshot: ${desktopOutputDir}`)
+check('control desktop: model request carries actual image content', dt[5].images?.some((i) => i.image && i.bytes > 8), JSON.stringify(dt[5].images))
 const images = existsSync(desktopOutputDir) ? readdirSync(desktopOutputDir) : []
 check('control desktop: screenshot preserves PNG bytes', images.length === 1 && readFileSync(join(desktopOutputDir, images[0])).equals(desktopPng), images.join(','))
 contains('control desktop: clipboard read runs', dt[6].lastContent, 'Example desktop clipboard')
@@ -782,6 +792,33 @@ const desktopTargets = seen.map((s) => s.argv[s.argv.indexOf('--') + 1])
 const wantTargets = ['root@desktop.example', 'root@desktop.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'root@desktop.example', 'root@desktop.example']
 check('control desktop: reads target both configured machines in call order', JSON.stringify(desktopTargets) === JSON.stringify(wantTargets), JSON.stringify(desktopTargets))
 check('control desktop: root actions include a drop to the graphical UID', seen.filter((s) => s.argv.includes('root@desktop.example') && !s.argv.at(-1).includes('# DSH_DESKTOP_PROBE_V2')).every((s) => s.argv.at(-1).includes('--reuid') && s.argv.at(-1).includes('--init-groups')), 'root actions must not execute graphical utilities as UID 0')
+}
+
+if (include('control-desktop-niri')) {
+console.log('# control-desktop niri profile (explicitly allowlisted input)')
+writeFileSync(fakeDesktopLog, '')
+const nt = await run('control-desktop-niri', 'control-desktop-niri', [
+  call('tools_load', { targets: ['pack:desktop'] }),
+  call('desktop_windows', { host: 'example-niri' }),
+  call('desktop_screen', { host: 'example-niri' }),
+  call('desktop_focus', { host: 'example-niri', window: '42' }),
+  call('desktop_click', { host: 'example-niri', x: 12, y: 22 }),
+  call('desktop_type', { host: 'example-niri', text: "Example's $(id); literal\\n" }),
+  call('desktop_key', { host: 'example-niri', combo: 'ctrl+shift+l' }),
+  { text: 'done' },
+], ['Remote niri control'])
+contains('control niri: native focus and workspace-view geometry', nt[2].lastContent, 'Example niri window', '"focused":true', '"x":12', 'workspace-view logical pixels')
+contains('control niri: screenshot path accompanies image', nt[3].lastToolContent, `screenshot: ${desktopOutputDir}`)
+check('control niri: image reaches model request', nt[3].images?.some((i) => i.image && i.bytes > 8), JSON.stringify(nt[3].images))
+for (const [index, expected] of [[4, 'focused 42'], [5, 'clicked 12,22'], [6, 'typed'], [7, 'sent desktop key combo']]) contains('control niri: explicitly allowed input runs', nt[index].lastContent, expected)
+const calls = readFileSync(fakeDesktopLog, 'utf8').trim().split('\n').filter(Boolean).map((s) => JSON.parse(s))
+check('control niri: six calls plus probes all reach niri host', calls.length === 12 && calls.every((s) => s.argv.includes('user@niri.example')), JSON.stringify(calls.map((s) => s.argv.at(-1).slice(-100))))
+const actions = calls.filter((s) => !s.argv.at(-1).includes('# DSH_DESKTOP_PROBE_V2'))
+const script = (s) => s.argv.at(-1).slice("sh -c '".length, -1).split(`'\\''`).join("'")
+check('control niri: focus uses native id', script(actions[2]).endsWith("'niri' 'msg' 'action' 'focus-window' '--id' '42'"), script(actions[2]))
+check('control niri: click discovers system socket', script(actions[3]).includes('/run/ydotoold/socket') && script(actions[3]).endsWith("'ydotool' 'mousemove' '--absolute' '-x' '12' '-y' '22' && 'ydotool' 'click' '0xC0'"), script(actions[3]))
+check('control niri: type uses stdin without shell interpolation', actions[4].stdin === "Example's $(id); literal\\n" && script(actions[4]).endsWith("'ydotool' 'type' '--file' '-'"), JSON.stringify(actions[4]))
+check('control niri: keys use evdev and reverse modifier release', script(actions[5]).endsWith("'ydotool' 'key' '29:1' '42:1' '38:1' '38:0' '42:0' '29:0'"), script(actions[5]))
 }
 
 // --- llm profile: small-model classification, cached --------------------------

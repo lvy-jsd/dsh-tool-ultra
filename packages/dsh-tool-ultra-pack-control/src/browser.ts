@@ -213,7 +213,8 @@ export function createBrowserTools(options: BrowserOptions = {}): ToolSpec[] {
     },
     {
       name: 'browser_shot', pack: 'browser', risk: 'low',
-      description: 'Screenshot a remote browser tab via SSH/CDP. Saves a bounded PNG locally and returns its path for read_image.',
+      screenshot: true,
+      description: 'Screenshot a remote browser tab via SSH/CDP. Returns an image when DSH attachments are available, plus a bounded local PNG path.',
       parameters: { host: hostParam, tab: tabParam }, describe: (a) => `${a?.host}: browser screenshot (tab ${a?.tab ?? 'selected'})`,
       async execute(a) { return connected(a.host, async (cdp) => {
         const { send } = await selected(cdp, a.host, a.tab)

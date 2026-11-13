@@ -9,6 +9,8 @@ export interface DesktopSessionConfig {
   /** Graphical account name or UID. Root drops to this account; other logins cannot switch UID. */
   user?: string
   backend?: DesktopKind
+  /** niri defaults to ydotool; other Wayland compositors default to wtype. */
+  keyboard?: 'ydotool' | 'wtype'
   env?: Partial<Record<typeof DESKTOP_ENV[number], string>>
 }
 export interface DesktopUser { name: string, uid: number, gid: number, home: string }
@@ -28,6 +30,7 @@ export function checkDesktopSession(config: DesktopSessionConfig = {}): void {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('desktop must be a session configuration object.')
   if (config.user !== undefined && (typeof config.user !== 'string' || !USER.test(config.user))) throw new Error('desktop.user must be an account name or numeric UID.')
   if (config.backend !== undefined && !DESKTOP_BACKENDS.includes(config.backend)) throw new Error('Bad desktop backend: use x11, sway, hyprland, niri or wayland.')
+  if (config.keyboard !== undefined && !['ydotool', 'wtype'].includes(config.keyboard)) throw new Error('desktop.keyboard must be ydotool or wtype.')
   if (config.env !== undefined && (!config.env || typeof config.env !== 'object' || Array.isArray(config.env))) throw new Error('desktop.env must be an object.')
   for (const [key, value] of Object.entries(config.env ?? {})) {
     if (!(DESKTOP_ENV as readonly string[]).includes(key) || typeof value !== 'string' || value.length > 4096 || /[\0\r\n]/.test(value)) throw new Error(`Invalid desktop environment override: ${key}.`)
@@ -184,6 +187,17 @@ export function selectDesktopSession(raw: string, config: DesktopSessionConfig =
     if (selectors.some((k) => override[k as keyof typeof override] && record.env[k] && override[k as keyof typeof override] !== record.env[k])) continue
     const env: Record<string, string> = { ...record.env, ...override }
     delete env.XDG_SESSION_ID
+    // SSH and Xwayland clients can have only part of the compositor env. A
+    // Wayland marker must never make such a process an X11 desktop candidate.
+    const waylandHint = env.XDG_SESSION_TYPE === 'wayland' || env.NIRI_SOCKET || /(?:^|[:;\s])(niri|sway|hyprland)(?:$|[:;\s])/i.test(env.XDG_CURRENT_DESKTOP ?? '')
+    if (!env.WAYLAND_DISPLAY && waylandHint && config.backend !== 'x11') {
+      const displays = [...sockets.values()].filter((s) => s.uid === record.uid && /\/wayland-[^/]+$/.test(s.path))
+      const niriDisplay = /\/niri\.(wayland-[^./]+)\..*\.sock$/.exec(env.NIRI_SOCKET ?? '')?.[1]
+      const selected = niriDisplay ? displays.find((s) => s.path.endsWith(`/${niriDisplay}`)) : displays.length === 1 ? displays[0] : undefined
+      if (!selected) continue
+      env.WAYLAND_DISPLAY = selected.path
+      env.XDG_RUNTIME_DIR ||= selected.path.slice(0, selected.path.lastIndexOf('/'))
+    }
     let type: string, path: string
     if (env.WAYLAND_DISPLAY) {
       type = 'wayland'
@@ -203,7 +217,7 @@ export function selectDesktopSession(raw: string, config: DesktopSessionConfig =
     if (association) for (const id of association.active) group.sessionIds.add(id)
     for (const [k, v] of Object.entries(env)) {
       if (!v) continue
-      if (group.env[k] && group.env[k] !== v && ['XAUTHORITY', 'SWAYSOCK', 'NIRI_SOCKET', 'HYPRLAND_INSTANCE_SIGNATURE'].includes(k)) throw new Error('Conflicting graphical session environments; set hosts.<alias>.desktop.user and desktop.env explicitly.')
+      if (group.env[k] && group.env[k] !== v && ['XAUTHORITY', 'SWAYSOCK', 'NIRI_SOCKET', 'HYPRLAND_INSTANCE_SIGNATURE', 'YDOTOOL_SOCKET'].includes(k)) throw new Error('Conflicting graphical session environments; set hosts.<alias>.desktop.user and desktop.env explicitly.')
       group.env[k] = v
     }
     groups.set(key, group)
@@ -222,7 +236,7 @@ export function selectDesktopSession(raw: string, config: DesktopSessionConfig =
     const owned = [...sockets.values()].filter((s) => s.uid === group.uid && s.path.startsWith(`${runtime}/`))
     const onlyDisplay = owned.filter((s) => /^wayland-[^/]+$/.test(s.path.slice(runtime.length + 1))).length === 1
     for (const [name, matches] of [
-      ['NIRI_SOCKET', owned.filter((s) => s.path.startsWith(`${runtime}/niri.${env.WAYLAND_DISPLAY}.`) && s.path.endsWith('.sock'))],
+      ['NIRI_SOCKET', owned.filter((s) => s.path.startsWith(`${runtime}/niri.${env.WAYLAND_DISPLAY.split('/').at(-1)}.`) && s.path.endsWith('.sock'))],
       ['SWAYSOCK', onlyDisplay ? owned.filter((s) => /\/sway-ipc\.[^/]+\.sock$/.test(s.path)) : []],
       ['HYPRLAND_INSTANCE_SIGNATURE', onlyDisplay ? owned.filter((s) => /\/hypr\/[^/]+\/\.socket\.sock$/.test(s.path)) : []],
     ] as const) if (!env[name] && matches.length === 1) env[name] = name === 'HYPRLAND_INSTANCE_SIGNATURE' ? matches[0].path.split('/').at(-2)! : matches[0].path

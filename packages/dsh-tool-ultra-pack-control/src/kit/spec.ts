@@ -20,6 +20,8 @@ export interface ToolSpec<N extends string = string> {
   pack: string
   risk: Risk
   description: string
+  /** Successful `screenshot: <path>` results are attached by the DSH adapter. Plain specs retain paths. */
+  screenshot?: true
   parameters: Record<string, ParamSpec>
   /** This tool (or matching arguments) cannot bypass call approval through allow. */
   alwaysAsk?: boolean | ((args: Args) => boolean)

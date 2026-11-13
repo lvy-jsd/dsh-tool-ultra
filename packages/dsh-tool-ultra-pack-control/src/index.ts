@@ -9,6 +9,7 @@ import { redact } from './kit/policy.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createAudit, defaultAuditFile, type Audit } from './kit/audit.js'
 import type { ToolSpec } from './kit/spec.js'
+import { attachScreenshot, SCREENSHOT_OUTPUT } from './kit/screenshot.js'
 import { SSH_EXEC_TOOL_NAMES, SSH_TOOL_NAMES, createSshTools, type SshConfig } from './ssh.js'
 
 export * from './kit/audit.js'
@@ -170,7 +171,7 @@ export function apply(ctx: any, config: Config = {}) {
       name: spec.name,
       description: spec.description,
       parameters: spec.parameters,
-      output: TEXT_OUTPUT,
+      output: spec.screenshot ? SCREENSHOT_OUTPUT : TEXT_OUTPUT,
       // UI snapshots have per-device state used by subsequent taps.
       isConcurrencySafe: () => spec.risk === 'low' && spec.name !== 'adb_ui' && spec.pack !== 'browser',
       async execute(args: unknown, exec?: PreExecute) {
@@ -192,7 +193,7 @@ export function apply(ctx: any, config: Config = {}) {
           const out = await inCall(scope, () => spec.execute(args))
           if (scope.failed) throw new Error(out)
           ok = true
-          return out
+          return spec.screenshot ? await attachScreenshot(out, ctx.get?.('attachments')) : out
         } finally {
           audit({ tool: spec.name, summary: redact(spec.describe(args)), event: 'result', ok, ms: Date.now() - started })
         }
