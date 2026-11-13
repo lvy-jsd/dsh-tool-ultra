@@ -57,7 +57,7 @@ const env = { ...process.env, DSH_HOME: home, FAKE_LLM_KEY: 'x', DSH_TELEMETRY_M
 // everything. In CI (GitHub Actions sets CI=true) the default is core; locally
 // it is full. TM_E2E_TIER overrides either.
 const tier = process.env.TM_E2E_TIER ?? (process.env.CI ? 'core' : 'full')
-const CORE = new Set(['core-main', 'core-deny', 'core-ptc', 'rules-main', 'attr-main', 'devices-main', 'control-main'])
+const CORE = new Set(['core-main', 'core-deny', 'core-ptc', 'rules-main', 'attr-main', 'devices-main', 'control-main', 'control-approved'])
 const include = (label) => tier === 'full' || CORE.has(label)
 // A profile is created only if one of its scenarios runs.
 const profileNeeds = {
@@ -67,6 +67,10 @@ const profileNeeds = {
   'attr-rules': ['attr-rules-main'], exempt: ['exempt-main'], gate: ['gate-main'],
   cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'],
   control: ['control-main', 'control-adb-disabled', 'control-desktop-disabled', 'control-browser-disabled'], 'control-adb': ['control-adb-main'],
+  'control-approved': ['control-approved'],
+  'control-config-ssh': ['control-config-ssh'], 'control-config-adb': ['control-config-adb'],
+  'control-config-desktop': ['control-config-desktop'], 'control-config-browser': ['control-config-browser'],
+  'control-browser-approved': ['control-browser-approved'],
   'control-desktop': ['control-desktop-main'], 'control-desktop-niri': ['control-desktop-niri'], 'control-browser': ['control-browser-main'],
 }
 const needProfile = (name) => profileNeeds[name].some(include)
@@ -191,7 +195,7 @@ if (needProfile('packs')) makeProfile('packs', ['dsh-tool-ultra-core', 'dsh-tool
 // remote command) and prints a marker. A call that reaches it shows up in the log.
 const fakeSsh = join(root, 'fake-ssh.sh')
 const fakeSshLog = join(root, 'fake-ssh.log')
-if (needProfile('control')) {
+if (needProfile('control') || needProfile('control-approved') || ['ssh', 'adb', 'desktop', 'browser'].some((p) => needProfile(`control-config-${p}`))) {
   writeFileSync(fakeSsh, `#!/bin/sh\nfor last; do :; done\necho "$last" >> ${fakeSshLog}\necho FAKE-SSH-OUTPUT\n`, { mode: 0o755 })
   makeProfile('control', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
 # Loads pass without a question, so only the call-time gate is under test.
@@ -206,6 +210,10 @@ if (needProfile('control')) {
     sshBin: ${fakeSsh}
     multiplex: false
     auditFile: ${join(root, 'control-audit.jsonl')}
+    packConfig:
+      adb: { adbConnect: wrong-type }
+      desktop: { desktopCacheMs: wrong-type }
+      browser: { browserAllowPrivate: wrong-type }
     hosts:
       t: { target: 'root@fake.invalid' }
 `)
@@ -215,7 +223,7 @@ if (needProfile('control')) {
 // lets the scenario prove a refused root call never even starts the adb client.
 const fakeAdb = join(root, 'fake-adb.mjs')
 const fakeAdbLog = join(root, 'fake-adb.log.jsonl')
-if (needProfile('control-adb')) {
+if (needProfile('control-adb') || needProfile('control-approved') || needProfile('control-config-ssh')) {
   writeFileSync(fakeAdb, `#!${process.execPath}
 import { appendFileSync, readFileSync } from 'node:fs'
 const argv = process.argv.slice(2)
@@ -225,6 +233,10 @@ if (JSON.stringify(argv) === JSON.stringify(['connect', 'phone.example:5555'])) 
   process.stdout.write('connected to phone.example:5555\\n')
 } else if (JSON.stringify(argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'sh']) && stdin.includes('uiautomator dump --compressed ')) {
   process.stdout.write(readFileSync(${JSON.stringify(join(here, 'fixtures', 'pack-control', 'ui.xml'))}))
+} else if (JSON.stringify(argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'su', '-c', 'sh']) && stdin === 'id\\n') {
+  process.stdout.write('uid=0(root) gid=0(root)\\n')
+} else if (JSON.stringify(argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'sh']) && stdin.includes("input keyevent 'KEYCODE_HOME'")) {
+  process.stdout.write('APPROVED-ADB-INPUT\\n')
 } else {
   process.stderr.write('Unexpected fake adb invocation\\n')
   process.exitCode = 1
@@ -320,7 +332,7 @@ ${profile === 'control-desktop-niri' ? `- id: tm-testkit
 const fakeBrowserSsh = join(root, 'fake-browser-ssh.mjs')
 const fakeBrowserLog = join(root, 'fake-browser-ssh.jsonl')
 const browserOutputDir = join(root, 'browser-screens')
-if (needProfile('control-browser')) {
+if (needProfile('control-browser') || needProfile('control-browser-approved')) {
   writeFileSync(fakeBrowserSsh, `#!${process.execPath}
 import { appendFileSync } from 'node:fs'
 import { startFakeCdp } from ${JSON.stringify(new URL('./fixtures/pack-control/fake-cdp.mjs', import.meta.url).href)}
@@ -343,7 +355,7 @@ if (argv.includes('-L')) {
   process.stdout.write('93.184.216.34 STREAM page.example\\n')
 } else throw Error('Unexpected fake browser SSH command')
 `, { mode: 0o755 })
-  makeProfile('control-browser', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
+  for (const profile of ['control-browser', 'control-browser-approved'].filter(needProfile)) makeProfile(profile, ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
 - id: tool-manager-risk-gate
   name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
   config:
@@ -360,6 +372,50 @@ if (argv.includes('-L')) {
     hosts:
       example: { target: 'root@browser.example' }
       secondary: { target: 'user@secondary.example', browser: { port: 9333 } }
+${profile === 'control-browser-approved' ? `- id: tm-testkit
+  name: dsh-tm-testkit
+  config: { approveTools: [browser_open, browser_key, browser_eval] }
+` : ''}`)
+}
+
+// Real DSH approval/request flow, with testkit standing in for Allow once.
+if (needProfile('control-approved')) makeProfile('control-approved', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
+- id: tool-manager-risk-gate
+  name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
+  config: { allow: { '*': true } }
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs: { ssh: true, ssh-exec: true, adb: true, adb-root: true }
+    sshBin: ${fakeSsh}
+    adbBin: ${fakeAdb}
+    multiplex: false
+    auditFile: ${join(root, 'control-approved-audit.jsonl')}
+    hosts: { t: { target: 'user@host.example.com', packs: [ssh, ssh-exec] } }
+    serials: { example-phone: 'phone.example:5555' }
+- id: tm-testkit
+  name: dsh-tm-testkit
+  config: { approveTools: [ssh_run, ssh_write, adb_shell, adb_input] }
+`)
+
+// One invalid enabled family per profile. The other families must survive;
+// invalid disabled values are covered by the base control profile. No real network is used.
+for (const pack of ['ssh', 'adb', 'desktop', 'browser']) {
+  const profile = `control-config-${pack}`
+  if (!needProfile(profile)) continue
+  makeProfile(profile, ['dsh-tool-ultra-core', 'dsh-tool-ultra-pack-control'], `
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs: { ssh: true, adb: true, desktop: true, browser: true }
+    sshBin: ${fakeSsh}
+    adbBin: ${fakeAdb}
+    multiplex: false
+    auditFile: ''
+    hosts: { example: { target: 'user@host.example.com' } }
+    serials: { example-phone: 'phone.example:5555' }
+    packConfig:
+      ${pack}: { timeoutMs: wrong-type }
 `)
 }
 
@@ -383,6 +439,7 @@ async function run(profile, label, script, args, extraEnv = {}) {
     if (d.kind === 'turn' && d.step >= 0) turns[d.step] = d
   }
   if (process.env.TM_E2E_TIMING) console.log(`[timing] ${label}: ${Date.now() - t0}ms`)
+  turns.diagnostics = result.stderr + '\n' + result.stdout
   return turns
 }
 const fakeTools = (turn, prefix = 'mcp__fake__') => turn.tools.filter((n) => n.startsWith(prefix)).sort()
@@ -697,6 +754,53 @@ check('control adb: only the permitted UI call reached the adb client',
   JSON.stringify(adbSeen))
 }
 
+// --- Approved SSH/ADB calls and startup configuration failures ------------------
+if (include('control-approved')) {
+writeFileSync(fakeSshLog, '')
+writeFileSync(fakeAdbLog, '')
+const approved = await run('control-approved', 'control-approved', [
+  call('tools_load', { targets: ['pack:ssh-exec', 'pack:adb', 'adb_shell'] }),
+  call('ssh_run', { host: 't', cmd: "printf 'approved-example'" }),
+  call('ssh_write', { host: 't', path: '/tmp/example.txt', content: 'APPROVAL-BODY-EXAMPLE' }),
+  call('adb_shell', { device: 'example-phone', root: true, cmd: 'id' }),
+  call('adb_input', { device: 'example-phone', kind: 'key', value: 'KEYCODE_HOME' }),
+  call('ssh_put', { host: 't', name: 'unapproved.txt', remote: '/tmp/unapproved.txt' }),
+  { text: 'done' },
+], ['Approved remote control'])
+contains('control approved: SSH command executes after approval', approved[2].lastContent, 'FAKE-SSH-OUTPUT')
+contains('control approved: SSH write executes after approval', approved[3].lastContent, 'wrote 21 bytes')
+contains('control approved: KernelSU shell executes after approval', approved[4].lastContent, 'uid=0(root)')
+contains('control approved: Android input executes after approval', approved[5].lastContent, 'APPROVED-ADB-INPUT')
+contains('control approved: another tool still requires its own approval', approved[6].lastContent, /approval/i)
+const auditRaw = readFileSync(join(root, 'control-approved-audit.jsonl'), 'utf8')
+const events = auditRaw.trim().split('\n').map(JSON.parse)
+const expected = ['ssh_run', 'ssh_write', 'adb_shell', 'adb_input']
+check('control approved: each action gets exactly one approval followed by one successful result', JSON.stringify(events.filter((e) => e.event !== 'denied').map((e) => [e.tool, e.event, e.ok])) === JSON.stringify(expected.flatMap((tool) => [[tool, 'approved', true], [tool, 'result', true]])), auditRaw)
+check('control approved: denied upload is audited', events.some((e) => e.tool === 'ssh_put' && e.event === 'denied' && !e.ok), auditRaw)
+check('control approved: audit omits command and file bodies', !auditRaw.includes('approved-example') && !auditRaw.includes('APPROVAL-BODY-EXAMPLE'), auditRaw)
+const sshSeen = readFileSync(fakeSshLog, 'utf8').trim().split('\n')
+check('control approved: only approved SSH actions reach the client', sshSeen.length === 2 && sshSeen[0].includes('approved-example') && sshSeen[1].includes('/tmp/example.txt'), sshSeen.join(' | '))
+const adbSeen = readFileSync(fakeAdbLog, 'utf8').trim().split('\n').map(JSON.parse)
+check('control approved: exact root shell argv and stdin reach adb once', adbSeen.filter((c) => c.argv.includes('su')).length === 1 && JSON.stringify(adbSeen[1]?.argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'su', '-c', 'sh']) && adbSeen[1]?.stdin === 'id\n', JSON.stringify(adbSeen))
+check('control approved: exactly two actions and their reconnects reach adb', adbSeen.length === 4, JSON.stringify(adbSeen))
+}
+
+for (const pack of ['ssh', 'adb', 'desktop', 'browser']) {
+  const label = `control-config-${pack}`
+  if (!include(label)) continue
+  const healthy = pack === 'ssh' ? 'adb' : 'ssh'
+  const turns = await run(label, label, [
+    call('tools_load', { targets: [`pack:${pack}`, `pack:${healthy}`] }),
+    healthy === 'ssh' ? call('ssh_hosts') : call('adb_ui', { device: 'example-phone' }),
+    { text: 'done' },
+  ], ['Invalid control configuration'])
+  contains(`control config ${pack}: startup gives a useful field error`, turns.diagnostics, `Disabled control pack ${pack}`, 'timeoutMs', 'must be an integer')
+  contains(`control config ${pack}: bad pack cannot load`, turns[1].lastContent, `skipped pack:${pack}:`)
+  const affected = (n) => pack === 'adb' ? [...ADB_READ_INPUT, ...ADB_ROOT].includes(n) : n.startsWith(`${pack}_`)
+  check(`control config ${pack}: no partially registered tools`, turns.every((t) => !t.tools.some(affected)), JSON.stringify(turns.map((t) => t.tools)))
+  contains(`control config ${pack}: healthy pack still executes`, turns[2].lastContent, healthy === 'ssh' ? 'user@host.example.com' : 'untrusted_android_content')
+}
+
 // --- Remote browser control (full tier only, fake SSH + real local CDP WebSocket) ---
 const BROWSER = ['browser_tabs', 'browser_page', 'browser_shot', 'browser_open', 'browser_click', 'browser_type', 'browser_key', 'browser_eval'].sort()
 const browserTools = (turn) => turn.tools.filter((name) => BROWSER.includes(name)).sort()
@@ -744,6 +848,25 @@ const seen = existsSync(fakeBrowserLog) ? readFileSync(fakeBrowserLog, 'utf8').t
 check('control browser: exactly four reads reach SSH; refused mutations cannot resolve or connect', seen.length === 4 && seen.every((s) => s.argv.includes('-L')), JSON.stringify(seen))
 expect('control browser: both fake hosts are addressed', seen.map((s) => s.argv[s.argv.indexOf('--') + 1]), ['root@browser.example','root@browser.example','user@secondary.example','user@secondary.example'])
 check('control browser: every listener is private Unix or loopback and has an owned SSH process', seen.every((s) => (process.platform === 'win32' ? /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/ : /^\/.*\/cdp-\d+\.sock:127\.0\.0\.1:(9222|9333)$/).test(s.argv[s.argv.indexOf('-L') + 1]) && s.argv.includes('ControlPath=none') && s.argv.includes('StreamLocalBindMask=0177')), JSON.stringify(seen))
+}
+
+if (include('control-browser-approved')) {
+writeFileSync(fakeBrowserLog, '')
+const bt = await run('control-browser-approved', 'control-browser-approved', [
+  call('tools_load', { targets: ['pack:browser', 'browser_eval'] }),
+  call('browser_open', { host: 'example', url: 'https://page.example/' }),
+  call('browser_key', { host: 'example', tab: 'tab-example', key: 'Enter' }),
+  call('browser_eval', { host: 'example', tab: 'tab-example', js: 'location.href' }),
+  { text: 'done' },
+], ['Approved browser control'])
+contains('control browser approved: navigation executes', bt[2].lastContent, 'tab-created')
+contains('control browser approved: input executes', bt[3].lastContent, 'Browser key sent')
+contains('control browser approved: eval executes as untrusted output', bt[4].lastContent, 'untrusted_browser_content', 'Example eval result')
+const raw = readFileSync(join(root, 'control-browser-audit.jsonl'), 'utf8')
+const events = raw.trim().split('\n').map(JSON.parse).filter((e) => e.event === 'approved')
+check('control browser approved: each mutation uses DSH approval once', JSON.stringify(events.map((e) => e.tool)) === JSON.stringify(['browser_open', 'browser_key', 'browser_eval']), raw)
+const calls = readFileSync(fakeBrowserLog, 'utf8').trim().split('\n').map(JSON.parse)
+check('control browser approved: three owned forwards plus remote DNS only', calls.length === 4 && calls.filter((c) => c.argv.includes('-L')).length === 3, JSON.stringify(calls))
 }
 
 // --- Remote desktop control scenarios (full tier only) -----------------------
