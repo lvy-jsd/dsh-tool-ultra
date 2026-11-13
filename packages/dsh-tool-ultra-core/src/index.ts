@@ -73,8 +73,8 @@ const LIST_PAGE = 50
 
 /** One page of entry lines, with a continue hint when more entries follow. */
 function pageLines(entries: string[], offset: number, limit: number): string[] {
-  const start = Math.max(0, Math.floor(offset))
-  const end = Math.min(entries.length, start + Math.max(1, Math.floor(limit)))
+  const start = Math.max(0, Math.floor(Number(offset) || 0))
+  const end = Math.min(entries.length, start + Math.max(1, Math.floor(Number(limit) || LIST_PAGE)))
   const shown = entries.slice(start, end)
   const rest = entries.length - end
   if (rest > 0) shown.push(`  … ${rest} more; continue with offset=${end}`)
