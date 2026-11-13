@@ -68,3 +68,21 @@ test('a high-risk tool with no gate is refused per target while the batch still 
   assert.match(result, /refused: beta_tool/)
   assert.match(result, /no risk gate is installed/)
 })
+
+test('a group of only high-risk tools with no gate is skipped, not reported as already loaded', async (t) => {
+  const { catalog, agent, execute } = coreHost(t)
+  catalog.updateConfig({ highRisk: ['alpha_tool', 'beta_tool'] })
+  const result = await execute('tools_load', { targets: ['misc'] })
+  assert.equal(catalog.stateOf(agent).loaded.size, 0, 'nothing was loaded')
+  assert.match(result, /Nothing new loaded/)
+  assert.match(result, /skipped misc: only high-risk tools, load them one by one/)
+  assert.ok(!result.includes('already loaded'), 'a group that loaded nothing is not "already loaded"')
+})
+
+test('a group that is already loaded is still reported as already loaded', async (t) => {
+  const { execute } = coreHost(t)
+  await execute('tools_load', { targets: ['misc'] })
+  const result = await execute('tools_load', { targets: ['misc'] })
+  assert.match(result, /Nothing new loaded/)
+  assert.match(result, /already loaded: misc/)
+})

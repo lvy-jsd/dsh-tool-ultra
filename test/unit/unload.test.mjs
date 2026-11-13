@@ -109,8 +109,20 @@ test('a typo in an unload target gets the same did-you-mean hint as tools_load',
   assert.match(result, /Did you mean: alpha_tool/)
 })
 
-test('an always-on tool is outside the directory and reports not found, like tools_load', async (t) => {
+test('an always-on tool is outside the directory and says it cannot be unloaded', async (t) => {
   const { execute } = coreHost(t)
   const result = await execute('tools_unload', { targets: ['read'] })
-  assert.match(result, /skipped read: not found/)
+  assert.match(result, /Nothing was unloaded/)
+  assert.match(result, /read is always on and cannot be unloaded/)
+  assert.ok(!result.includes('Did you mean'), 'no did-you-mean hint for an always-on tool')
+})
+
+test('unloading a mix of a loaded tool and an always-on tool reports each target', async (t) => {
+  const { catalog, agent, execute } = coreHost(t)
+  await execute('tools_load', { targets: ['alpha_tool'] })
+  const result = await execute('tools_unload', { targets: ['alpha_tool', 'read'] })
+  assert.ok(!catalog.stateOf(agent).loaded.has('alpha_tool'))
+  assert.match(result, /Unloaded 1 tool/)
+  assert.match(result, /unloaded: alpha_tool/)
+  assert.match(result, /read is always on and cannot be unloaded/)
 })

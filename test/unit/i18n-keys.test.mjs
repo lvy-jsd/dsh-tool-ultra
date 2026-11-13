@@ -99,8 +99,8 @@ test('risk-gate: the high-risk prompt has matching en and zh-CN keys', async () 
   // The prompt must name the tool, its pack, why it is high risk, and what
   // approving does — in both languages.
   for (const [lang, needles] of [
-    ['en', ['merge_pull_request', 'GitHub', 'hard to undo', 'loads them into this session']],
-    ['zh-CN', ['merge_pull_request', 'GitHub', '难以撤销', '加载到当前会话']],
+    ['en', ['merge_pull_request', 'GitHub', 'marked high-risk', 'loads them into this session']],
+    ['zh-CN', ['merge_pull_request', 'GitHub', '被标记为高危', '加载到当前会话']],
   ]) {
     const prompt = result.displayReason[lang]
     for (const needle of needles) assert.ok(prompt.includes(needle), `risk-gate: ${lang} prompt missing "${needle}"`)

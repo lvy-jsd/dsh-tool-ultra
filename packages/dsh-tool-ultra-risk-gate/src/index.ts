@@ -140,8 +140,8 @@ export function apply(ctx: ExtensionContext, config: RiskGateConfig = {}) {
       kind: 'ask',
       reason: `Loading high-risk tool(s): ${list}`,
       displayReason: {
-        en: `Load high-risk tool(s)? ${list}\nWhy: these tools are marked high-risk because they make changes that are hard to undo.\nApproving loads them into this session so the model can call them; nothing runs until the model calls one.`,
-        'zh-CN': `加载高危工具？${list}\n原因：这些工具被标记为高危，因为它们会做出难以撤销的更改。\n批准后，这些工具会被加载到当前会话，模型可以调用它们；在模型调用之前不会执行任何操作。`,
+        en: `Load high-risk tool(s)? ${list}\nWhy: these tools are marked high-risk.\nApproving loads them into this session so the model can call them; nothing runs until the model calls one.`,
+        'zh-CN': `加载高危工具？${list}\n原因：这些工具被标记为高危。\n批准后，这些工具会被加载到当前会话，模型可以调用它们；在模型调用之前不会执行任何操作。`,
       },
     }
   }), 'tool-manager-risk-gate.pre-execute()')

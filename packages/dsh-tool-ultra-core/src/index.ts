@@ -979,8 +979,24 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
       if (node.kind === 'missing') return `skipped ${raw}: not found (try tools_ls with query)${didYouMean(cat, raw)}`
       if (node.kind === 'root') return `skipped ${raw}: cannot load the whole tree`
       if (node.kind === 'tool' && node.tool.highRisk && riskGates.size === 0 && !before.has(node.tool.name)) return `refused: ${raw} (high risk, no risk gate is installed to confirm it)`
-      const newTools = toolsUnder(cat, node).filter((t) => addedSet.has(t.name))
-      return newTools.length ? `loaded: ${raw}` : `already loaded: ${raw}`
+      const tools = toolsUnder(cat, node)
+      const newTools = tools.filter((t) => addedSet.has(t.name))
+      if (newTools.length) {
+        // Every tool this target added is blocked by another plugin: it is
+        // loaded but not callable, so say denied instead of loaded.
+        if (newTools.every((t) => denied.has(t.name))) return `denied: ${raw} (blocked by another plugin)`
+        return `loaded: ${raw}`
+      }
+      // Nothing was added under this target. "already loaded" is only true when
+      // every tool under it was already loaded before this call; a group of
+      // high-risk tools (skipped) or one blocked by another plugin is not.
+      if (tools.length && tools.every((t) => t.highRisk)) return `skipped ${raw}: only high-risk tools, load them one by one`
+      if (tools.length && tools.every((t) => denied.has(t.name))) return `denied: ${raw} (blocked by another plugin)`
+      if (tools.length && tools.every((t) => before.has(t.name))) return `already loaded: ${raw}`
+      // Nothing was loaded and not everything was already loaded: the tools
+      // were filtered out or are unavailable in this session.
+      if (tools.every((t) => !t.highRisk && !denied.has(t.name) && !before.has(t.name))) return `skipped ${raw}: not available in this session`
+      return `already loaded: ${raw}`
     })
     return [
       callable.length ? `Loaded ${callable.length} tool(s), ${fmtTokens(tokens)}; callable from your next step:` : 'Nothing new loaded.',
@@ -1048,7 +1064,12 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     // not loaded / not found) instead of only the tools that left.
     const perTarget = nodes.map(({ raw, all, node }) => {
       if (all) return removed.length ? `unloaded all: ${removed.length} tool(s)` : 'nothing was loaded'
-      if (node.kind === 'missing') return `skipped ${raw}: not found (try tools_ls with query)${didYouMean(cat, raw)}`
+      if (node.kind === 'missing') {
+        // An always-on (pinned) tool is outside the directory, so it resolves
+        // to missing; say it cannot be unloaded instead of "not found".
+        if (pinnedSet().has(raw.replace(/^\/+/, ''))) return `${raw} is always on and cannot be unloaded`
+        return `skipped ${raw}: not found (try tools_ls with query)${didYouMean(cat, raw)}`
+      }
       if (node.kind === 'root') return `skipped ${raw}: cannot unload the whole tree (use "all")`
       const removedTools = toolsUnder(cat, node).filter((t) => removedSet.has(t.name))
       return removedTools.length ? `unloaded: ${raw}` : `not loaded: ${raw}`
@@ -1064,7 +1085,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   ctx.tools.register(defineTool({
     name: 'tools_ls',
     description:
-      'Browse every available tool as a directory: / lists categories, /<category> lists groups (a connector or plugin), /<category>/<group> lists tools with a one-line summary and schema size. Tools marked * are loaded (callable now). Most tools are hidden until loaded with tools_load. Pass query to search names and descriptions across the whole tree (or under path) in one step. Listings longer than 50 entries are truncated with a hint; pass offset (and limit) to page through them.',
+      'Browse every available tool as a directory: / lists categories, /<category> lists groups (a connector or plugin), /<category>/<group> lists tools with a one-line summary and schema size. Tools marked * are loaded (callable now). Most tools are hidden until loaded with tools_load. Pass query to search names and descriptions across the whole tree (or under path) in one step; search results are capped at 40, so narrow the query to see more. Directory listings longer than 50 entries are truncated with a hint; pass offset (and limit) to page through them (pagination applies to listings only, not to search results).',
     parameters: {
       path: { type: 'string', description: 'Directory path such as "/", "/code", "/code/github", or a group or tool name. Default "/".' },
       query: { type: 'string', description: 'Search words matched against tool name, group, category and description; searches everything under path.' },
