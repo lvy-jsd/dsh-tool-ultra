@@ -21,7 +21,7 @@ export class Cdp {
       } catch { this.stop(new Error('Malformed CDP JSON.')) }
     })
     ws.addEventListener('close', () => this.stop(new Error('CDP connection closed.')))
-    ws.addEventListener('error', (event) => this.stop(new Error(String((event as Event & { message?: string }).message ?? 'CDP connection failed.'))))
+    ws.addEventListener('error', (event) => { const why = String((event as Event & { message?: string }).message ?? '').trim(); this.stop(new Error(why ? `CDP connection failed: ${why}` : 'CDP connection failed.')) })
   }
   static async connect(port: number | string, remotePort: number, timeout: number, maxBytes: number): Promise<Cdp> {
     if (typeof globalThis.WebSocket !== 'function') throw new Error('Browser control needs Node >=22 with built-in WebSocket.')
