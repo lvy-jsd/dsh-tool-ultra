@@ -190,11 +190,12 @@ test('invalid toolUltra values are ignored and logged once', (t) => {
   assert.equal(warnings.length, before)
 })
 
-// Like host(), but `schemas()` returns the given list verbatim, so two
-// "providers" can register the same tool name (the host dedupes by name, so
-// the real host only surfaces a collision through the layer merge). The
-// registered entry tools are captured so a test can call tools_ls directly.
-function hostWithSchemas(t, schemas) {
+// Like host(), but with real tool layers: the host's merged view (deduped by
+// name, as in the real host) plus a preset (ancestor) layer the agents
+// inherit, the way the DSH web profile registers most tools. `agentIds` are
+// the live agents; the registered entry tools are captured so a test can call
+// tools_ls directly.
+function hostWithLayers(t, hostSchemas, presetTools, agentIds) {
   const dir = mkdtempSync(join(tmpdir(), 'b5-toolultra-dup-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const listeners = new Map()
@@ -207,36 +208,46 @@ function hostWithSchemas(t, schemas) {
   const effect = (fn) => { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose) }
   t.after(() => disposers.reverse().forEach((dispose) => dispose()))
   const restrictions = new Set()
-  const agent = { id: 'session-dup', options: { provider: 'fake' }, ctx: { tools: { restrict: ({ allow }) => { const entry = new Set(allow); restrictions.add(entry); return () => restrictions.delete(entry) } } } }
+  const agents = agentIds.map((id) => ({ id, options: { provider: 'fake' }, ctx: { tools: { restrict: ({ allow }) => { const entry = new Set(allow); restrictions.add(entry); return () => restrictions.delete(entry) } } } }))
   const services = {}
   const warnings = []
   const registered = new Map()
+  // One shared preset layer, plus an (empty) own layer per agent, so
+  // chainLayers(agent) is the preset followed by the agent's own layer.
+  const presetLayer = { tools: new Map(presetTools) }
+  const ownLayers = new Map(agents.map((a) => [a, { tools: new Map() }]))
   const ctx = {
     logger: () => ({ warn: (m) => warnings.push(m), info() {}, debug() {} }),
     tools: {
-      schemas: () => schemas,
+      schemas: () => hostSchemas,
       register: (def) => { registered.set(def.name, def); return () => registered.delete(def.name) },
+      layers: {
+        chainLayers: (agent) => [presetLayer, ownLayers.get(agent)],
+        peek: (agent) => ownLayers.get(agent),
+      },
     },
     effect, on,
     emit: (event, ...args) => { for (const fn of listeners.get(event) ?? []) fn(...args) },
     serial: async (event, ...args) => { for (const fn of listeners.get(event) ?? []) await fn(...args) },
     provide: (name, service) => { services[name] = service },
-    inject: (_deps, fn) => fn({ agents: { list: () => [agent], get: () => undefined }, effect, on }),
+    inject: (_deps, fn) => fn({ agents: { list: () => agents, get: () => undefined }, effect, on }),
     get: () => undefined,
   }
   apply(ctx, { settingsFile: join(dir, 'settings.json'), metadataFile: join(dir, 'metadata.json'), exemptFile: join(dir, 'exempt.json'), manifestFile: '', sidecar: { bin: '/nonexistent' } })
   services.toolCatalog.refresh()
-  return { catalog: services.toolCatalog, agent, warnings, registered }
+  return { catalog: services.toolCatalog, agent: agents[0], warnings, registered }
 }
 
-test('duplicate tool names: first registration wins, warning logged, entry marked', (t) => {
-  // Two providers register the same name; the host (first) version must win.
-  const schemas = [
+test('an inherited tool with the same name but different content: first registration wins, warning logged, entry marked', (t) => {
+  // The host's merged view and the agent's preset layer register the same
+  // name with different content: a real collision. The host (first) version
+  // must win.
+  const hostSchemas = [
     { name: 'dup_tool', description: 'Host version.', parameters: {} },
-    { name: 'dup_tool', description: 'Plugin version.', parameters: {} },
     { name: 'unique_tool', description: 'Only one registration.', parameters: {} },
   ]
-  const { catalog, warnings } = hostWithSchemas(t, schemas)
+  const presetTools = new Map([['dup_tool', { name: 'dup_tool', description: 'Preset version.', parameters: {} }]])
+  const { catalog, warnings } = hostWithLayers(t, hostSchemas, presetTools, ['session-dup'])
   const cat = catalog.get()
   // Only one entry, and it is the first registration (the host's).
   assert.equal(cat.tools.size, 2, 'the duplicate collapses to a single entry')
@@ -253,12 +264,26 @@ test('duplicate tool names: first registration wins, warning logged, entry marke
   assert.equal(warnings.length, before)
 })
 
-test('duplicate tool names: the shadowed flag reaches tools_ls and find()', async (t) => {
-  const schemas = [
-    { name: 'dup_tool', description: 'Host version.', parameters: {} },
-    { name: 'dup_tool', description: 'Plugin version.', parameters: {} },
-  ]
-  const { catalog, agent, registered } = hostWithSchemas(t, schemas)
+test('agents sharing one preset layer: the shared tools are not duplicates (no shadowed flag, no warning)', (t) => {
+  // Two bots inherit the same preset layer; the host's view is deduped by
+  // name, so the shared tools reach the catalog twice with identical content.
+  const hostSchemas = [{ name: 'host_tool', description: 'Host tool.', parameters: {} }]
+  const presetTools = new Map([['shared_tool', { name: 'shared_tool', description: 'Preset tool.', parameters: {} }]])
+  const { catalog, warnings } = hostWithLayers(t, hostSchemas, presetTools, ['session-a', 'session-b'])
+  const cat = catalog.get()
+  assert.equal(cat.tools.size, 2, 'host tool plus the shared preset tool')
+  for (const tool of cat.tools.values()) assert.equal(tool.shadowed, undefined, tool.name)
+  assert.equal(warnings.filter((w) => w.includes('duplicate')).length, 0)
+  // The structured find() result has no shadowed field.
+  const found = catalog.find('shared_tool')
+  assert.equal(found.length, 1)
+  assert.equal(found[0].shadowed, undefined)
+})
+
+test('an inherited tool with the same name but different content: the shadowed flag reaches tools_ls and find()', async (t) => {
+  const hostSchemas = [{ name: 'dup_tool', description: 'Host version.', parameters: {} }]
+  const presetTools = new Map([['dup_tool', { name: 'dup_tool', description: 'Preset version.', parameters: {} }]])
+  const { catalog, agent, registered } = hostWithLayers(t, hostSchemas, presetTools, ['session-dup'])
   // The tools_ls listing of the group shows the [shadowed] marker.
   const node = catalog.resolve('dup_tool')
   assert.equal(node.kind, 'tool')
@@ -274,11 +299,11 @@ test('duplicate tool names: the shadowed flag reaches tools_ls and find()', asyn
 })
 
 test('no duplicate names: output is unchanged (no shadowed flag, no warning)', (t) => {
-  const schemas = [
+  const hostSchemas = [
     { name: 'alpha_tool', description: 'First.', parameters: {} },
     { name: 'beta_tool', description: 'Second.', parameters: {} },
   ]
-  const { catalog, warnings } = hostWithSchemas(t, schemas)
+  const { catalog, warnings } = hostWithLayers(t, hostSchemas, new Map(), ['session-dup'])
   const cat = catalog.get()
   for (const tool of cat.tools.values()) assert.equal(tool.shadowed, undefined, tool.name)
   assert.equal(warnings.filter((w) => w.includes('duplicate')).length, 0)

@@ -409,13 +409,19 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     const pinned = pinnedSet()
     // Duplicate names: the first registration wins. The host's merged view is
     // added before the inherited (ancestor-layer) tools, so the host and the
-    // earlier registration take priority over a later one. The kept entry is
-    // marked `shadowed` so tools_ls and the panel can show the collision.
+    // earlier registration take priority over a later one. A name with the
+    // same content twice is not a collision — the host's view is deduped by
+    // name, and several agents can inherit the same preset layer — so only a
+    // different registration under the same name is. The kept entry is marked
+    // `shadowed` so tools_ls and the panel can show the collision.
     const byName = new Map<string, ToolSchema>()
     const shadowed = new Set<string>()
+    const sameContent = (a: ToolSchema, b: ToolSchema) =>
+      a === b || (JSON.stringify(a.description) === JSON.stringify(b.description) && JSON.stringify(a.parameters) === JSON.stringify(b.parameters))
     const addSchema = (s: ToolSchema) => {
-      if (byName.has(s.name)) { shadowed.add(s.name); return }
-      byName.set(s.name, s)
+      const kept = byName.get(s.name)
+      if (kept && !sameContent(kept, s)) shadowed.add(s.name)
+      if (!kept) byName.set(s.name, s)
     }
     for (const s of ctx.tools.schemas()) addSchema(s)
     for (const a of agent ? [agent] : visibility.agents()) {
