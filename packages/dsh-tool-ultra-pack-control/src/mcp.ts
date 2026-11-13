@@ -24,9 +24,12 @@ const object = (v: unknown): v is ObjectValue => !!v && typeof v === 'object' &&
 const failure = (id: Id | null, code: number, message: string): Reply => ({ jsonrpc: '2.0', id, error: { code, message } })
 const safeError = (e: unknown) => capText(redact(e instanceof Error ? e.message : String(e)), 2000)
 
+/** Low-risk in DSH but too sensitive for an MCP client with no approval channel (clipboards often hold passwords). */
+const MCP_EXCLUDED: ReadonlySet<string> = new Set(['desktop_clipboard_get'])
+
 /** Fail closed for whole tools, including tools that only sometimes need approval. */
 function eligible(spec: ToolSpec): boolean {
-  return spec.risk === 'low' && spec.approve === undefined && spec.alwaysAsk === undefined
+  return spec.risk === 'low' && spec.approve === undefined && spec.alwaysAsk === undefined && !MCP_EXCLUDED.has(spec.name)
 }
 
 function inputSchema(spec: ToolSpec) {

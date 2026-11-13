@@ -76,12 +76,13 @@ test('MCP config: refuse ambiguous entries, malformed YAML, duplicates, tags and
 })
 
 test('MCP: whole-tool read-only registration cannot be widened by allow, readOnly:false or adbAskInput:false', async () => {
-  const expected = ['ssh_hosts', 'ssh_sys', 'ssh_read', 'ssh_log', 'adb_devices', 'adb_info', 'adb_screen', 'adb_ui', 'adb_logcat', 'desktop_screen', 'desktop_windows', 'desktop_clipboard_get', 'browser_tabs', 'browser_page', 'browser_shot']
+  const expected = ['ssh_hosts', 'ssh_sys', 'ssh_read', 'ssh_log', 'adb_devices', 'adb_info', 'adb_screen', 'adb_ui', 'adb_logcat', 'desktop_screen', 'desktop_windows', 'browser_tabs', 'browser_page', 'browser_shot']
   for (const allow of [{}, { '*': true }, { '*': '*' }, { '*': createTools(base).map((s) => s.name) }]) {
     let executions = 0
     const server = await ready({ readOnly: false, adbAskInput: false, allow, exec: async () => { executions++; return ok() } })
     const tools = (await server.handle(request('tools/list'))).result.tools
     assert.deepEqual(tools.map((t) => t.name), expected)
+    assert.ok(!tools.some((t) => t.name === 'desktop_clipboard_get'), 'clipboard reads are never exposed over MCP')
     for (const tool of tools) {
       assert.equal(tool.inputSchema.type, 'object')
       assert.equal(tool.inputSchema.additionalProperties, false)

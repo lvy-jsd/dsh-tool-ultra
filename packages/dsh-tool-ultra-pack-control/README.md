@@ -764,16 +764,16 @@ command = "pack-control-mcp"
 args = ["--config", "/path/to/control.yml"]
 ```
 
-Only whole tools with `risk: low`, **no `approve` function** and **no `alwaysAsk` rule** are registered. Enabled packs, host whitelists, family overrides and `disable` still apply. `readOnly: false`, `adbAskInput: false` and every form of `allow` **cannot add mutating or approval-requiring tools**. No MCP request changes this policy. Even the read-only forms of `ssh_run`, `adb_shell` and `adb_app` are unavailable because those tools also accept mutating arguments.
+Only whole tools with `risk: low`, **no `approve` function** and **no `alwaysAsk` rule** are registered. Enabled packs, host whitelists, family overrides and `disable` still apply. `readOnly: false`, `adbAskInput: false` and every form of `allow` **cannot add mutating or approval-requiring tools**. No MCP request changes this policy. Even the read-only forms of `ssh_run`, `adb_shell` and `adb_app` are unavailable because those tools also accept mutating arguments. `desktop_clipboard_get` is also never exposed over MCP: clipboards often hold passwords and MCP clients have no per-call approval. It remains available in the DSH desktop pack.
 
 | Family | Available when enabled |
 | --- | --- |
 | SSH | `ssh_hosts`, `ssh_sys`, `ssh_read`, `ssh_log` |
 | Android | `adb_devices`, `adb_info`, `adb_screen`, `adb_ui`, `adb_logcat` |
-| Desktop | `desktop_screen`, `desktop_windows`, `desktop_clipboard_get` |
+| Desktop | `desktop_screen`, `desktop_windows` |
 | Browser | `browser_tabs`, `browser_page`, `browser_shot` |
 
-“Read-only” follows the existing observation-tool policy: it still allows transport setup (SSH/ADB connections), temporary UI dumps, local screenshots and audit appends. It exposes remote files, logs, clipboard, screen and signed-in page data according to the existing configuration; remote content remains untrusted. Each stdio connection owns fresh tool instances and a server-generated session ID through the shared call scope. Client names and `_meta` cannot choose another session. Calls run serially, with shared transport-failure tracking, redaction and the same body-free JSONL audit/default audit path as DSH. `auditFile: ''` explicitly disables audit.
+“Read-only” follows the existing observation-tool policy: it still allows transport setup (SSH/ADB connections), temporary UI dumps, local screenshots and audit appends. It exposes remote files, logs, screen and signed-in page data according to the existing configuration; remote content remains untrusted. Each stdio connection owns fresh tool instances and a server-generated session ID through the shared call scope. Client names and `_meta` cannot choose another session. Calls run serially, with shared transport-failure tracking, redaction and the same body-free JSONL audit/default audit path as DSH. `auditFile: ''` explicitly disables audit.
 
 Successful screenshots return text plus MCP `{ type: "image", mimeType: "image/png", data: "<base64 PNG>" }` content, retaining the private PNG path. No DSH attachment service is required. Image-read and transport failures return `isError: true`; base64 is never put inside text or audit records.
 
