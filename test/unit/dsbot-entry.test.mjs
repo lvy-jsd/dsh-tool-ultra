@@ -4,13 +4,18 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 
 // Load a hand-written browser module (window.__ModuleLoader__.load({...})) and
-// return its factory, without a browser. `globals` are extra browser globals
-// the module's factory may touch (document, MutationObserver, ...).
-function loadFactory(path, globals = {}) {
-  let registered
-  const window = { __ModuleLoader__: { load: (spec) => { registered = spec } } }
+// return its registrations, without a browser. `globals` are extra browser
+// globals the module's factory may touch (document, MutationObserver, ...).
+function loadModules(path, globals = {}) {
+  const registrations = []
+  const window = { __ModuleLoader__: { load: (spec) => { registrations.push(spec) } } }
   runInNewContext(readFileSync(new URL(path, import.meta.url), 'utf8'), { window, ...globals })
-  return registered
+  return registrations
+}
+// The panel client registers two modules (the ds-bot helpers, then the
+// section); entry points load the last one.
+function loadFactory(path, globals = {}) {
+  return loadModules(path, globals).at(-1)
 }
 
 const react = { createElement: () => null, useEffect() {}, useRef: () => ({}), useState: (v) => [v, () => {}], useCallback: (f) => f }
@@ -152,9 +157,13 @@ test('dsbot entry falls back to the inline helpers when the /dsbot module is mis
 
 // --- dsbot pure module tests ---
 
+// The ds-bot helpers are registered by the panel client itself: the host only
+// injects the package's ./client bundle, so loading it is enough to require
+// '@lvy-jsd/dsh-tool-ultra-panel/dsbot'.
 function loadDsbot() {
-  const spec = loadFactory('../../packages/dsh-tool-ultra-panel/lib/dsbot.js')
-  assert.equal(spec.id, '@lvy-jsd/dsh-tool-ultra-panel/dsbot')
+  const spec = loadModules('../../packages/dsh-tool-ultra-panel/lib/client.js')
+    .find((s) => s.id === '@lvy-jsd/dsh-tool-ultra-panel/dsbot')
+  assert.ok(spec, 'the panel client registers the dsbot module')
   return spec.factory(() => ({}))
 }
 

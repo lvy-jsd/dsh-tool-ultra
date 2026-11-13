@@ -13,5 +13,5 @@
     "alwaysStrict": false,
     "inlineSources": true
   },
-  "files": ["src/client.ts", "src/dsbot.ts"]
+  "files": ["src/client.ts"]
 }
