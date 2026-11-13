@@ -9,7 +9,7 @@
 // are provided by other plugins through the `toolCatalog` service.
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { buildCatalog, resolveTarget, toolsUnder, estimateTokens, UNCATEGORIZED } from './catalog.js'
+import { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, UNCATEGORIZED } from './catalog.js'
 import { createMetadataStore, defaultMetadataFile } from './metadata.js'
 import { createExemptStore, defaultExemptFile } from './exempt.js'
 import { defaultManifestFile, syncManifest } from './manifest.js'
@@ -21,7 +21,7 @@ import { Bm25 } from './router/bm25.js'
 import type { Agent, AuditEntry, LoadRefusal, Annotation, Catalog, CatalogNode, CoreConfig, Disposer, FoundTool, HostContext, Logger, RiskGate, SearchFallback, SerializedState, ToolCatalogService, ToolEntry, ToolMeta, ToolPack, ToolPackItem, ToolSchema, GroupNote, Group, PendingCall } from './types.js'
 
 export type * from './types.js'
-export { buildCatalog, resolveTarget, toolsUnder, estimateTokens, summary, shortName, structuralGroup, DEFAULT_CATEGORIES, UNCATEGORIZED, MISC_GROUP, OVERRIDE_PRIORITY } from './catalog.js'
+export { buildCatalog, closestNames, resolveTarget, toolsUnder, estimateTokens, summary, shortName, structuralGroup, DEFAULT_CATEGORIES, UNCATEGORIZED, MISC_GROUP, OVERRIDE_PRIORITY } from './catalog.js'
 export type { BuildOptions } from './catalog.js'
 export type { RegisteredClassifier, RegisteredFilter } from './service.js'
 export type { VisibilityController, VisibilityOptions } from './visibility.js'
@@ -65,6 +65,20 @@ function fmtTokens(n: number): string {
 
 function pad(text: string, width: number): string {
   return text.length >= width ? `${text} ` : text + ' '.repeat(width - text.length)
+}
+
+// A directory page: listings longer than this are truncated, and the hint at
+// the end tells the model how to continue.
+const LIST_PAGE = 50
+
+/** One page of entry lines, with a continue hint when more entries follow. */
+function pageLines(entries: string[], offset: number, limit: number): string[] {
+  const start = Math.max(0, Math.floor(Number(offset) || 0))
+  const end = Math.min(entries.length, start + Math.max(1, Math.floor(Number(limit) || LIST_PAGE)))
+  const shown = entries.slice(start, end)
+  const rest = entries.length - end
+  if (rest > 0) shown.push(`  … ${rest} more; continue with offset=${end}`)
+  return shown
 }
 
 export function apply(ctx: HostContext, config: CoreConfig = {}) {
@@ -748,7 +762,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     return `  ${marks} ${pad(label, withPath ? 48 : 34)}${pad(fmtTokens(tool.tokens), 11)}${denied.has(tool.name) ? '[denied] ' : ''}${tool.summary}`
   }
 
-  function listing(cat: Catalog, node: CatalogNode, visible: Set<string> | null, denied: Set<string> = new Set()): string {
+  function listing(cat: Catalog, node: CatalogNode, visible: Set<string> | null, denied: Set<string> = new Set(), offset = 0, limit = LIST_PAGE): string {
     const count = (tools: readonly ToolEntry[]) => ({
       n: tools.length,
       loaded: tools.filter((t) => visible?.has(t.name)).length,
@@ -757,20 +771,24 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     const lines: string[] = []
     if (node.kind === 'root') {
       lines.push('/  (categories; * = loaded, ! = high risk, [denied] = loaded but blocked by another plugin; tools_ls with query searches everything)')
+      const entries: string[] = []
       for (const category of cat.categories.values()) {
         const c = count(category.groups.flatMap((g) => g.tools))
         if (c.n === 0 && category.name !== UNCATEGORIZED) continue
-        lines.push(`  ${pad(`${category.name}/`, 16)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${pad(fmtTokens(c.tokens), 11)}${category.description}`)
+        entries.push(`  ${pad(`${category.name}/`, 16)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${pad(fmtTokens(c.tokens), 11)}${category.description}`)
       }
+      lines.push(...pageLines(entries, offset, limit))
     } else if (node.kind === 'category') {
       lines.push(`/${node.category.name}/  ${node.category.description}`)
+      const entries: string[] = []
       for (const group of node.category.groups) {
         const c = count(group.tools)
-        lines.push(`  ${pad(`${group.name}/`, 22)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${fmtTokens(c.tokens)}${noteFor(group)}`)
+        entries.push(`  ${pad(`${group.name}/`, 22)}${pad(`${c.n} tools`, 10)}${pad(`${c.loaded} loaded`, 11)}${fmtTokens(c.tokens)}${noteFor(group)}`)
       }
+      lines.push(...pageLines(entries, offset, limit))
     } else if (node.kind === 'group') {
       lines.push(`/${node.group.category}/${node.group.name}/${noteFor(node.group)}`)
-      for (const tool of node.group.tools) lines.push(toolLine(tool, visible, denied))
+      lines.push(...pageLines(node.group.tools.map((tool) => toolLine(tool, visible, denied)), offset, limit))
     } else if (node.kind === 'tool') {
       const t = node.tool
       lines.push(`/${t.category}/${t.group}/${t.short}`, `  name: ${t.name}`, `  ${t.summary}`, `  schema ${fmtTokens(t.tokens)}${t.highRisk ? ' · high risk: load it on its own' : ''}${visible?.has(t.name) ? ' · loaded' : ''}${denied.has(t.name) ? ' · denied by another plugin (e.g. an MCP connector rule): not callable' : ''}`)
@@ -836,9 +854,19 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     return rankedTools(cat, node, query)
   }
 
+  /** A "did you mean" suffix for a target the catalog does not know. */
+  function didYouMean(cat: Catalog, target: string): string {
+    const suggestions = closestNames(cat, target)
+    return suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''
+  }
+
   /** The model-facing text for a set of hits. */
-  function formatSearch(query: string, hits: ToolEntry[], visible: Set<string> | null, denied: Set<string> = new Set()): string {
-    if (!hits.length) return `No tools match "${query}".`
+  function formatSearch(query: string, hits: ToolEntry[], visible: Set<string> | null, denied: Set<string> = new Set(), cat?: Catalog): string {
+    if (!hits.length) {
+      // A single-word query that names no tool may be a misspelling of one.
+      const words = query.trim().split(/\s+/).filter(Boolean)
+      return `No tools match "${query}".${words.length === 1 && cat ? didYouMean(cat, words[0]!) : ''}`
+    }
     const shown = hits.slice(0, 40)
     return [`${hits.length} match(es) for "${query}" (load by path or full name):`, ...shown.map((t) => toolLine(t, visible, denied, true)), hits.length > shown.length ? `  … ${hits.length - shown.length} more; narrow the query or the path` : ''].filter(Boolean).join('\n')
   }
@@ -881,10 +909,20 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     const paused = pausedRefusal(agent, targets)
     if (paused) return paused
     const cat = getCatalog(agent)
-    const nodes = targets.map((raw) => ({ raw, node: resolveCatalogTarget(cat, raw, agent) }))
+    // Report each target once: deduplicate on the trimmed name, keeping first
+    // order, so a repeated name is resolved, loaded and reported a single time.
+    const seen = new Set<string>()
+    const nodes: { raw: string, node: CatalogNode }[] = []
+    for (const raw of targets) {
+      const key = String(raw).trim()
+      if (seen.has(key)) continue
+      seen.add(key)
+      nodes.push({ raw: key, node: resolveCatalogTarget(cat, key, agent) })
+    }
+    const uniqueTargets = nodes.map(({ raw }) => raw)
     const names = nodes.flatMap(({ node }) => (node.kind === 'root' || node.kind === 'missing' ? [] : toolsUnder(cat, node).map((t) => t.name)))
     try {
-      await ctx.serial('tool-catalog/before-load', { agent, targets, names })
+      await ctx.serial('tool-catalog/before-load', { agent, targets: uniqueTargets, names })
     } catch (error) {
       return `Load refused: ${errorText(error)}`
     }
@@ -893,11 +931,8 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     const before = new Set(visibility.allowFor(agent) ?? [])
     const notes: string[] = []
     visibility.update(agent, (state) => {
-      for (const { raw, node } of nodes) {
-        if (node.kind === 'missing' || node.kind === 'root') {
-          notes.push(`skipped ${raw}: ${node.kind === 'root' ? 'cannot load the whole tree' : 'not found (try tools_ls with query)'}`)
-          continue
-        }
+      for (const { node } of nodes) {
+        if (node.kind === 'missing' || node.kind === 'root') continue
         // An alias (e.g. a capability pack) names exact tools: add those, never
         // the whole group they happen to live in.
         if (node.kind === 'category' && node.category.aliasTools) {
@@ -921,10 +956,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
           if (risky.length) notes.push(`${group.name}: high-risk tools not included (${risky.join(', ')}); load them one by one`)
         }
         if (node.kind === 'tool') {
-          if (node.tool.highRisk && riskGates.size === 0) {
-            notes.push(`${node.tool.name} is high risk and no risk gate is installed to confirm it; not loaded`)
-            continue
-          }
+          if (node.tool.highRisk && riskGates.size === 0) continue
           state.loaded.add(node.tool.name)
           state.excluded.delete(node.tool.name)
           if (forSubagents) state.handoffTools.add(node.tool.name)
@@ -933,17 +965,44 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     })
     const after = visibility.allowFor(agent) ?? []
     const added = after.filter((n) => !before.has(n))
-    recordAudit({ kind: 'load', agentId: String(agent.id), summary: targets.join(', '), ok: true })
-    ctx.emit('tool-catalog/after-load', { agent, targets, added })
+    recordAudit({ kind: 'load', agentId: String(agent.id), summary: uniqueTargets.join(', '), ok: true })
+    ctx.emit('tool-catalog/after-load', { agent, targets: uniqueTargets, added })
     const denied = deniedFor(agent)
     const blocked = added.filter((n) => denied.has(n))
     const callable = added.filter((n) => !denied.has(n))
     if (blocked.length) warnDenied(blocked)
     const tokens = callable.reduce((sum, n) => sum + (cat.tools.get(n)?.tokens ?? 0), 0)
+    // One line per target, so a mixed batch reports each target (loaded /
+    // already loaded / not found / refused) instead of failing the whole call.
+    const addedSet = new Set(added)
+    const perTarget = nodes.map(({ raw, node }) => {
+      if (node.kind === 'missing') return `skipped ${raw}: not found (try tools_ls with query)${didYouMean(cat, raw)}`
+      if (node.kind === 'root') return `skipped ${raw}: cannot load the whole tree`
+      if (node.kind === 'tool' && node.tool.highRisk && riskGates.size === 0 && !before.has(node.tool.name)) return `refused: ${raw} (high risk, no risk gate is installed to confirm it)`
+      const tools = toolsUnder(cat, node)
+      const newTools = tools.filter((t) => addedSet.has(t.name))
+      if (newTools.length) {
+        // Every tool this target added is blocked by another plugin: it is
+        // loaded but not callable, so say denied instead of loaded.
+        if (newTools.every((t) => denied.has(t.name))) return `denied: ${raw} (blocked by another plugin)`
+        return `loaded: ${raw}`
+      }
+      // Nothing was added under this target. "already loaded" is only true when
+      // every tool under it was already loaded before this call; a group of
+      // high-risk tools (skipped) or one blocked by another plugin is not.
+      if (tools.length && tools.every((t) => t.highRisk)) return `skipped ${raw}: only high-risk tools, load them one by one`
+      if (tools.length && tools.every((t) => denied.has(t.name))) return `denied: ${raw} (blocked by another plugin)`
+      if (tools.length && tools.every((t) => before.has(t.name))) return `already loaded: ${raw}`
+      // Nothing was loaded and not everything was already loaded: the tools
+      // were filtered out or are unavailable in this session.
+      if (tools.every((t) => !t.highRisk && !denied.has(t.name) && !before.has(t.name))) return `skipped ${raw}: not available in this session`
+      return `already loaded: ${raw}`
+    })
     return [
       callable.length ? `Loaded ${callable.length} tool(s), ${fmtTokens(tokens)}; callable from your next step:` : 'Nothing new loaded.',
       ...callable.map((n) => `  ${n}`),
       ...(blocked.length ? [`Denied by another plugin (e.g. an MCP connector rule), not callable even when loaded: ${blocked.join(', ')}`] : []),
+      ...perTarget,
       ...notes,
     ].join('\n')
   }
@@ -951,20 +1010,31 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   /** Hide targets again. Returns the model-facing text. */
   async function unloadTargets(agent: Agent, targets: readonly string[]): Promise<string> {
     const cat = getCatalog(agent)
+    // Report each target once: deduplicate on the trimmed name, keeping first
+    // order, so a repeated name is resolved and reported a single time.
+    const seen = new Set<string>()
+    const nodes: { raw: string, all: boolean, node: CatalogNode }[] = []
+    for (const raw of targets) {
+      const key = String(raw).trim()
+      if (seen.has(key)) continue
+      seen.add(key)
+      const all = key.toLowerCase() === 'all'
+      nodes.push({ raw: key, all, node: all ? { kind: 'root' } : resolveCatalogTarget(cat, key, agent) })
+    }
+    const uniqueTargets = nodes.map(({ raw }) => raw)
     try {
-      await ctx.serial('tool-catalog/before-unload', { agent, targets })
+      await ctx.serial('tool-catalog/before-unload', { agent, targets: uniqueTargets })
     } catch (error) {
-      recordAudit({ kind: 'unload', agentId: String(agent.id), summary: targets.join(', '), ok: false })
+      recordAudit({ kind: 'unload', agentId: String(agent.id), summary: uniqueTargets.join(', '), ok: false })
       return `Unload refused: ${errorText(error)}`
     }
     const before = new Set(visibility.allowFor(agent) ?? [])
     visibility.update(agent, (state) => {
-      for (const raw of targets) {
-        if (String(raw).trim().toLowerCase() === 'all') {
+      for (const { all, node } of nodes) {
+        if (all) {
           for (const set of Object.values(state)) set.clear()
           continue
         }
-        const node = resolveCatalogTarget(cat, raw, agent)
         if (node.kind === 'category' && node.category.aliasTools) {
           for (const tool of node.category.aliasTools) {
             state.loaded.delete(tool.name)
@@ -987,30 +1057,51 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     })
     const after = new Set(visibility.allowFor(agent) ?? [])
     const removed = [...before].filter((n) => !after.has(n))
-    recordAudit({ kind: 'unload', agentId: String(agent.id), summary: targets.join(', '), ok: true })
-    ctx.emit('tool-catalog/after-unload', { agent, targets, removed })
-    return removed.length ? `Unloaded ${removed.length} tool(s):\n${removed.map((n) => `  ${n}`).join('\n')}` : 'Nothing was unloaded.'
+    recordAudit({ kind: 'unload', agentId: String(agent.id), summary: uniqueTargets.join(', '), ok: true })
+    ctx.emit('tool-catalog/after-unload', { agent, targets: uniqueTargets, removed })
+    const removedSet = new Set(removed)
+    // One line per target, so a mixed batch reports each target (unloaded /
+    // not loaded / not found) instead of only the tools that left.
+    const perTarget = nodes.map(({ raw, all, node }) => {
+      if (all) return removed.length ? `unloaded all: ${removed.length} tool(s)` : 'nothing was loaded'
+      if (node.kind === 'missing') {
+        // An always-on (pinned) tool is outside the directory, so it resolves
+        // to missing; say it cannot be unloaded instead of "not found".
+        if (pinnedSet().has(raw.replace(/^\/+/, ''))) return `${raw} is always on and cannot be unloaded`
+        return `skipped ${raw}: not found (try tools_ls with query)${didYouMean(cat, raw)}`
+      }
+      if (node.kind === 'root') return `skipped ${raw}: cannot unload the whole tree (use "all")`
+      const removedTools = toolsUnder(cat, node).filter((t) => removedSet.has(t.name))
+      return removedTools.length ? `unloaded: ${raw}` : `not loaded: ${raw}`
+    })
+    return [
+      removed.length ? `Unloaded ${removed.length} tool(s):` : 'Nothing was unloaded.',
+      ...removed.map((n) => `  ${n}`),
+      ...perTarget,
+    ].join('\n')
   }
 
   // --- tools -----------------------------------------------------------------------
   ctx.tools.register(defineTool({
     name: 'tools_ls',
     description:
-      'Browse every available tool as a directory: / lists categories, /<category> lists groups (a connector or plugin), /<category>/<group> lists tools with a one-line summary and schema size. Tools marked * are loaded (callable now). Most tools are hidden until loaded with tools_load. Pass query to search names and descriptions across the whole tree (or under path) in one step.',
+      'Browse every available tool as a directory: / lists categories, /<category> lists groups (a connector or plugin), /<category>/<group> lists tools with a one-line summary and schema size. Tools marked * are loaded (callable now). Most tools are hidden until loaded with tools_load. Pass query to search names and descriptions across the whole tree (or under path) in one step; search results are capped at 40, so narrow the query to see more. Directory listings longer than 50 entries are truncated with a hint; pass offset (and limit) to page through them (pagination applies to listings only, not to search results).',
     parameters: {
       path: { type: 'string', description: 'Directory path such as "/", "/code", "/code/github", or a group or tool name. Default "/".' },
       query: { type: 'string', description: 'Search words matched against tool name, group, category and description; searches everything under path.' },
+      offset: { type: 'number', description: 'Skip this many entries of the listing (default 0); the truncation hint names the offset to continue with.' },
+      limit: { type: 'number', description: `How many entries to show (default ${LIST_PAGE}).` },
     },
     output: TEXT_OUTPUT,
     isConcurrencySafe: () => true,
     async execute(args, exec) {
       const cat = getCatalog(exec?.agent as Agent | undefined)
       const node = resolveCatalogTarget(cat, args.path ?? '/', exec?.agent as Agent | undefined)
-      if (node.kind === 'missing') return `No such path: ${node.target}. Start from tools_ls("/") or search with tools_ls({query}).`
+      if (node.kind === 'missing') return `No such path: ${node.target}. Start from tools_ls("/") or search with tools_ls({query}).${didYouMean(cat, node.target)}`
       const agent = exec?.agent as Agent | undefined
       const visible = visibleSetFor(agent)
       const denied = deniedFor(agent)
-      if (!args.query) return listing(cat, node, visible, denied)
+      if (!args.query) return listing(cat, node, visible, denied, args.offset ?? 0, args.limit ?? LIST_PAGE)
       // The keyword match first; when it finds nothing, the ranked index
       // guesses, and a fallback (a small model) may say better.
       const keyword = keywordTools(cat, node, args.query)
@@ -1026,14 +1117,14 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
           known.add(tool.name)
         }
       }
-      return formatSearch(args.query, hits, visible, denied)
+      return formatSearch(args.query, hits, visible, denied, cat)
     },
   }))
 
   ctx.tools.register(defineTool({
     name: 'tools_load',
     description:
-      'Make tools callable for the rest of this session. Each target is a group path ("/code/github"), a category ("/maps"), one tool by path or exact name ("mcp__github__get_file_contents"), or a whole tool pack ("pack:web"). Bare names try pack: → cap: → device:, first match only. Loading a group also includes tools the group gains later. Prefer one group load over many single tools. Loaded tools are available from your next step. Set forSubagents to also hand these targets to subagents you start afterwards.',
+      'Make tools callable for the rest of this session. Each target is a group path ("/code/github"), a category ("/maps"), one tool by path or exact name ("mcp__github__get_file_contents"), or a whole tool pack ("pack:web"). Bare names try pack: → cap: → device:, first match only. Loading a group also includes tools the group gains later. Prefer one group load over many single tools. Loaded tools are available from your next step. Set forSubagents to also hand these targets to subagents you start afterwards. Every target is reported individually (loaded, already loaded, not found, or refused with the reason), so one bad name does not fail the rest of the batch.',
     parameters: {
       targets: { type: 'array', items: { type: 'string' }, required: true, description: 'Paths, group names or exact tool names.' },
       forSubagents: { type: 'boolean', description: 'Also give these targets to subagents started from now on.' },
@@ -1048,7 +1139,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   ctx.tools.register(defineTool({
     name: 'tools_unload',
     description:
-      'Hide loaded tools again to keep context small. Targets use the same forms as tools_load; "all" returns to the always-on set. Always-on tools cannot be unloaded.',
+      'Hide loaded tools again to keep context small. Targets use the same forms as tools_load; "all" returns to the always-on set. Always-on tools cannot be unloaded. Every target is reported individually (unloaded, not loaded, not found), so one bad name does not fail the rest of the batch.',
     parameters: {
       targets: { type: 'array', items: { type: 'string' }, required: true, description: 'Paths, group names, exact tool names, or "all".' },
     },

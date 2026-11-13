@@ -30,6 +30,7 @@
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { closestNames } from '../catalog.js'
 import { Bm25 } from './bm25.js'
 import { Sidecar } from './sidecar.js'
 import type {
@@ -91,8 +92,20 @@ function skillText(s: SkillRef): string {
   return `${s.name} ${s.summary} ${s.whenToUse ?? ''}`
 }
 
-function formatFind(hits: Hit<ToolRef>[]): string {
-  if (!hits.length) return 'No tools matched. Try different words, or tools_ls("/") to browse the directory.'
+function formatFind(hits: Hit<ToolRef>[], query?: string, catalog?: ToolCatalogService): string {
+  if (!hits.length) {
+    // A single-word query that names no tool may be a misspelling of one.
+    let hint = ''
+    if (query && catalog) {
+      try {
+        const suggestions = closestNames(catalog.get(), query)
+        if (suggestions.length) hint = ` Did you mean: ${suggestions.join(', ')}?`
+      } catch {
+        // a hint must never break the search
+      }
+    }
+    return `No tools matched. Try different words, or tools_ls("/") to browse the directory.${hint}`
+  }
   const lines = hits.map((h, i) => {
     const t = h.ref
     const risk = t.highRisk ? ' [high risk]' : ''
@@ -349,7 +362,7 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      return formatFind(await searchTools(String(args.query), Number(args.limit ?? topK)))
+      return formatFind(await searchTools(String(args.query), Number(args.limit ?? topK)), String(args.query), cat)
     },
   }))
 
@@ -373,8 +386,8 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
       const want = Number(args.limit ?? topK)
       const candidates = await searchTools(String(args.query), Math.max(want, 10))
       const ranked = await rerank(String(args.query), candidates, want)
-      if (args.load === false || !cat) return formatFind(ranked as Hit<ToolRef>[])
-      if (!agent) return formatFind(ranked as Hit<ToolRef>[])
+      if (args.load === false || !cat) return formatFind(ranked as Hit<ToolRef>[], String(args.query), cat)
+      if (!agent) return formatFind(ranked as Hit<ToolRef>[], String(args.query), cat)
       const targets = (ranked as Hit<ToolRef>[]).map((h) => h.ref.name)
       const loaded = await cat.load(agent, targets)
       const result = typeof loaded === 'string' ? loaded : loaded.message
