@@ -4,7 +4,7 @@
 //   ssh-exec   changes things: ssh_run, ssh_write, ssh_get, ssh_put
 //
 // Hosts are aliases from the config, never free-form: a model names `nix`, the
-// config says it is root@nixos port 22. The ssh client runs with an argument
+// config says it is root@host.example port 22. The ssh client runs with an argument
 // vector (no local shell), no password prompt and, where the platform allows it,
 // one multiplexed connection per host.
 import { mkdir, open, readFile, stat } from 'node:fs/promises'
