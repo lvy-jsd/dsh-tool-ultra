@@ -1,17 +1,5 @@
-/**
- * Tool Ultra control pack: SSH root control, as tools small models can use.
- *
- * Two packs. `ssh` is on by default; `ssh-exec` is off until the config turns it on:
- *
- * - ssh       ssh_hosts, ssh_sys, ssh_read, ssh_log        (read-only)
- * - ssh-exec  ssh_run, ssh_write, ssh_get, ssh_put         (changes things)
- *
- * The tools are plain `ToolSpec` objects (`createTools`) with no host types in
- * them, so this adapter and any other front end (an MCP server) share them.
- * Three layers keep a model on a short leash: a pack must be switched on, the
- * hosts are aliases from the config, and every call that may change something
- * asks the user first (see `gate`). `readOnly` removes the changing tools.
- */
+/** SSH and Android control packs, sharing alias checks, audit and call approval. */
+import { ADB_ROOT_TOOL_NAMES, ADB_TOOL_NAMES, createAdbTools, type AdbConfig } from './adb.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createAudit, defaultAuditFile, type Audit } from './kit/audit.js'
 import type { ToolSpec } from './kit/spec.js'
@@ -22,13 +10,16 @@ export * from './kit/exec.js'
 export * from './kit/policy.js'
 export * from './kit/spec.js'
 export * from './ssh.js'
+export * from './adb.js'
 
 export const name = 'tool-ultra-pack-control'
 export const inject = ['tools']
 
-export const TOOL_NAMES = [...SSH_TOOL_NAMES, ...SSH_EXEC_TOOL_NAMES] as const
+export const TOOL_NAMES = [...SSH_TOOL_NAMES, ...SSH_EXEC_TOOL_NAMES, ...ADB_TOOL_NAMES, ...ADB_ROOT_TOOL_NAMES] as const
 
 export const PACKS = {
+  adb: { title: 'Android (observe and input)', summary: 'Configured Android aliases over wireless adb. Inspect with adb_ui, tap a numbered element, and refresh after input.' },
+  'adb-root': { title: 'Android (shell and transfer)', summary: 'Android shell, KernelSU su, file transfers and APK installation. Root, upload and install calls ask first.' },
   ssh: { title: 'SSH (read-only)', summary: 'Look at remote hosts over SSH: overview, files, logs. Hosts come from the config.' },
   'ssh-exec': { title: 'SSH (run and write)', summary: 'Run commands and change files on remote hosts over SSH. Commands that only read run at once; everything else asks the user first.' },
 } as const
@@ -37,8 +28,8 @@ export type PackId = keyof typeof PACKS
 /** `true` or "*" skips the question for every tool; a list names the tools that skip it. */
 export type AllowSpec = boolean | string | string[]
 
-export interface Config extends SshConfig {
-  /** Which packs are on. Default: ssh on, ssh-exec off. */
+export interface Config extends SshConfig, AdbConfig {
+  /** Which packs are on. Default: ssh on, all other packs off. */
   packs?: Partial<Record<PackId, boolean>>
   /** Register only the read-only tools, whatever `packs` says. */
   readOnly?: boolean
@@ -56,7 +47,8 @@ export type CreateOptions = Config & { exec?: import('./kit/exec.js').Exec }
 export function createTools(opts: CreateOptions = {}): ToolSpec[] {
   const on = (id: PackId) => opts.packs?.[id] ?? id === 'ssh'
   const disabled = new Set(opts.disable ?? [])
-  return createSshTools(opts).filter((t) => on(t.pack as PackId) && !disabled.has(t.name) && !(opts.readOnly && t.risk !== 'low'))
+  const adb = on('adb') || on('adb-root') ? createAdbTools(opts) : []
+  return [...createSshTools(opts), ...adb].filter((t) => on(t.pack as PackId) && !disabled.has(t.name) && !(opts.readOnly && t.risk !== 'low'))
 }
 
 const TEXT_OUTPUT = {
@@ -119,7 +111,11 @@ export function apply(ctx: any, config: Config = {}) {
           summary: PACKS[id].summary,
           source: '@lvy-jsd/dsh-tool-ultra-pack-control',
           tools,
-          items: () => hostNames.length
+          items: () => id === 'adb' || id === 'adb-root'
+            ? Object.keys(config.serials ?? {}).length
+              ? Object.entries(config.serials!).map(([alias, serial]) => ({ id: alias, title: alias, state: 'on' as const, detail: `configured: ${serial} (use adb_devices to check)` }))
+              : [{ id: 'serials', title: 'Devices', state: 'waiting' as const, detail: 'no adb devices configured' }]
+            : hostNames.length
             ? hostNames.map((h) => ({ id: h, title: h, state: 'on' as const, detail: config.hosts![h].target }))
             : [{ id: 'hosts', title: 'Hosts', state: 'waiting' as const, detail: 'no hosts configured' }],
         }))
@@ -133,7 +129,8 @@ export function apply(ctx: any, config: Config = {}) {
       description: spec.description,
       parameters: spec.parameters,
       output: TEXT_OUTPUT,
-      isConcurrencySafe: () => spec.risk === 'low',
+      // UI snapshots have per-device state used by subsequent taps.
+      isConcurrencySafe: () => spec.risk === 'low' && spec.name !== 'adb_ui',
       async execute(args: unknown) {
         const started = Date.now()
         let ok = false

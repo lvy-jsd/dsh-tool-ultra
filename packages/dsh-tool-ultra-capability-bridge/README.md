@@ -34,7 +34,7 @@ approval, because the alias expands to the tool's own name.
     prefix: "cap:"          # change only if it collides with a real name
     listInDirectory: true   # add a "capabilities" category
     packs:
-      android-debug: ["/device/adb", "/device/phone", "adb_logcat"]
+      android-debug: ["pack:adb"]
       review:        [gh_get_file, merge_pull_request]
 ```
 
@@ -50,7 +50,7 @@ Another plugin (a capability store, a UI) can declare packs through the
 ```js
 ctx.inject(['toolCapabilityPacks'], (c) => {
   c.effect(() => c.toolCapabilityPacks.registerPack('android-debug', [
-    '/device/adb', 'adb_logcat',
+    'pack:adb',
   ]))
 })
 ```

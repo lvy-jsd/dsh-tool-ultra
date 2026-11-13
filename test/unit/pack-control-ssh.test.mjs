@@ -18,7 +18,7 @@ function fake(reply = ok()) {
   const exec = async (argv, options = {}) => { calls.push({ argv, options }); return typeof reply === 'function' ? reply(argv, options) : reply }
   return { exec, calls }
 }
-const HOSTS = { nix: { target: 'root@nixos.lan' }, box: { target: 'root@10.0.0.2', port: 2222, identity: '/k/id' } }
+const HOSTS = { nix: { target: 'root@host.example' }, box: { target: 'root@box.example', port: 2222, identity: '/k/id' } }
 const tools = (opts = {}) => Object.fromEntries(createTools({ hosts: HOSTS, packs: { ssh: true, 'ssh-exec': true }, ...opts }).map((t) => [t.name, t]))
 const remoteOf = (call) => call.argv[call.argv.length - 1]
 // The script inside `sh -c '<script>'`, with the outer quoting undone.
@@ -41,16 +41,16 @@ test('control: only the read-only pack is on by default; readOnly and disable na
 })
 
 test('control: ssh argv has no shell, no prompts, and the target after --', () => {
-  const argv = sshArgv({ target: 'root@box', port: 2222, identity: '/k/id' }, 'uptime', { controlDir: '/tmp/c' })
-  assert.deepEqual(argv, ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ControlMaster=auto', '-o', 'ControlPersist=60', '-o', 'ControlPath=/tmp/c/%C', '-p', '2222', '-i', '/k/id', '-o', 'IdentitiesOnly=yes', '--', 'root@box', 'uptime'])
-  assert.ok(!sshArgv({ target: 'a@b' }, 'x', { multiplex: false }).some((a) => a.includes('Control')))
+  const argv = sshArgv({ target: 'root@box.example', port: 2222, identity: '/k/id' }, 'uptime', { controlDir: '/tmp/c' })
+  assert.deepEqual(argv, ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ControlMaster=auto', '-o', 'ControlPersist=60', '-o', 'ControlPath=/tmp/c/%C', '-p', '2222', '-i', '/k/id', '-o', 'IdentitiesOnly=yes', '--', 'root@box.example', 'uptime'])
+  assert.ok(!sshArgv({ target: 'user@host.example' }, 'x', { multiplex: false }).some((a) => a.includes('Control')))
 })
 
 test('control: host entries that look like ssh options are refused', () => {
   assert.throws(() => checkHost('x', { target: '-oProxyCommand=evil' }), /not a valid ssh destination/)
   assert.throws(() => checkHost('x', { target: 'a b' }), /not a valid/)
-  assert.throws(() => checkHost('-x', { target: 'a@b' }), /Bad host alias/)
-  assert.throws(() => checkHost('x', { target: 'a@b', port: 70000 }), /bad port/)
+  assert.throws(() => checkHost('-x', { target: 'user@host.example' }), /Bad host alias/)
+  assert.throws(() => checkHost('x', { target: 'user@host.example', port: 70000 }), /bad port/)
   assert.throws(() => createTools({ hosts: { x: { target: '-F/etc/passwd' } } }), /not a valid/)
 })
 
@@ -162,9 +162,9 @@ test('control: ssh_log validates what it puts in the journalctl line', async () 
 })
 
 test('control: ssh_hosts lists aliases, and check reports who answers', async () => {
-  const t = tools({ exec: fake((argv) => (argv.includes('root@10.0.0.2') ? ok('', { code: 255, stderr: 'Connection refused\n' }) : ok())).exec })
-  assert.equal(await t.ssh_hosts.execute({}), 'nix: root@nixos.lan\nbox: root@10.0.0.2 port 2222')
-  assert.equal(await t.ssh_hosts.execute({ check: true }), 'nix: root@nixos.lan - reachable\nbox: root@10.0.0.2 port 2222 - unreachable: Connection refused')
+  const t = tools({ exec: fake((argv) => (argv.includes('root@box.example') ? ok('', { code: 255, stderr: 'Connection refused\n' }) : ok())).exec })
+  assert.equal(await t.ssh_hosts.execute({}), 'nix: root@host.example\nbox: root@box.example port 2222')
+  assert.equal(await t.ssh_hosts.execute({ check: true }), 'nix: root@host.example - reachable\nbox: root@box.example port 2222 - unreachable: Connection refused')
 })
 
 test('control: ssh_write sends content on stdin, never in the command line', async () => {

@@ -1,7 +1,7 @@
 {
   "name": "@lvy-jsd/dsh-tool-ultra-pack-control",
   "version": "0.5.0",
-  "description": "Tool Ultra control pack: SSH root control for small models. A read-only pack and a run/write pack, hosts from config, every changing call asks first. No npm dependencies.",
+  "description": "SSH and Android adb control for Tool Ultra: configured aliases, KernelSU su, file transfers and call approval. No npm dependencies.",
   "license": "Apache-2.0",
   "author": "lvy-jsd",
   "type": "module",
@@ -35,7 +35,10 @@
     "dsh-tool-ultra",
     "tools",
     "ssh",
-    "remote"
+    "remote",
+    "adb",
+    "android",
+    "kernelsu"
   ],
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0-0"
@@ -53,7 +56,19 @@
         "ssh_run": { "group": "ssh", "category": "system", "risk": "high" },
         "ssh_write": { "group": "ssh", "category": "system", "risk": "high" },
         "ssh_get": { "group": "ssh", "category": "system", "risk": "medium" },
-        "ssh_put": { "group": "ssh", "category": "system", "risk": "high" }
+        "ssh_put": { "group": "ssh", "category": "system", "risk": "high" },
+        "adb_devices": { "group": "adb", "category": "device", "risk": "low" },
+        "adb_info": { "group": "adb", "category": "device", "risk": "low" },
+        "adb_screen": { "group": "adb", "category": "device", "risk": "low" },
+        "adb_ui": { "group": "adb", "category": "device", "risk": "low" },
+        "adb_tap": { "group": "adb", "category": "device", "risk": "medium" },
+        "adb_input": { "group": "adb", "category": "device", "risk": "medium" },
+        "adb_app": { "group": "adb", "category": "device", "risk": "medium" },
+        "adb_logcat": { "group": "adb", "category": "device", "risk": "low" },
+        "adb_shell": { "group": "adb-root", "category": "device", "risk": "high" },
+        "adb_push": { "group": "adb-root", "category": "device", "risk": "high" },
+        "adb_pull": { "group": "adb-root", "category": "device", "risk": "high" },
+        "adb_install": { "group": "adb-root", "category": "device", "risk": "high" }
       }
     }
   },

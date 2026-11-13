@@ -26,6 +26,8 @@
 //   control core + risk-gate + the control pack with a fake ssh client: read-only
 //           tools run, a read-only ssh_run runs, any other call is refused for want
 //           of an approval channel and never reaches the client
+//   control-adb core + risk-gate + the Android packs with a fake adb client:
+//           UI dumps run; root shell calls require an approval channel
 //
 // Usage: node test/e2e.mjs [path/to/dsh]   (default: ~/.local/bin/dsh)
 import { spawn, spawnSync } from 'node:child_process'
@@ -59,7 +61,8 @@ const profileNeeds = {
   rules: ['rules-main'], preset: ['preset-main'], ptc: ['core-ptc'],
   persist: ['persist-main', 'persist-resume'], attr: ['attr-main'],
   'attr-rules': ['attr-rules-main'], exempt: ['exempt-main'], gate: ['gate-main'],
-  cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'], control: ['control-main'],
+  cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'],
+  control: ['control-main', 'control-adb-disabled'], 'control-adb': ['control-adb-main'],
 }
 const needProfile = (name) => profileNeeds[name].some(include)
 
@@ -200,6 +203,42 @@ if (needProfile('control')) {
     auditFile: ${join(root, 'control-audit.jsonl')}
     hosts:
       t: { target: 'root@fake.invalid' }
+`)
+}
+
+// Log every invocation, including connection attempts, before responding. This
+// lets the scenario prove a refused root call never even starts the adb client.
+const fakeAdb = join(root, 'fake-adb.mjs')
+const fakeAdbLog = join(root, 'fake-adb.log.jsonl')
+if (needProfile('control-adb')) {
+  writeFileSync(fakeAdb, `#!${process.execPath}
+import { appendFileSync, readFileSync } from 'node:fs'
+const argv = process.argv.slice(2)
+const stdin = readFileSync(0, 'utf8')
+appendFileSync(${JSON.stringify(fakeAdbLog)}, JSON.stringify({ argv, stdin }) + '\\n')
+if (JSON.stringify(argv) === JSON.stringify(['connect', 'phone.example:5555'])) {
+  process.stdout.write('connected to phone.example:5555\\n')
+} else if (JSON.stringify(argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'sh']) && stdin.includes('uiautomator dump --compressed ')) {
+  process.stdout.write(readFileSync(${JSON.stringify(join(here, 'fixtures', 'pack-control', 'ui.xml'))}))
+} else {
+  process.stderr.write('Unexpected fake adb invocation\\n')
+  process.exitCode = 1
+}
+`, { mode: 0o755 })
+  makeProfile('control-adb', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
+# Permit loading adb_shell to isolate its call-time approval from loading approval.
+- id: tool-manager-risk-gate
+  name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
+  config:
+    allow: { '*': true }
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs: { ssh: false, adb: true, adb-root: true }
+    adbBin: ${fakeAdb}
+    auditFile: ${join(root, 'control-adb-audit.jsonl')}
+    serials:
+      example-phone: 'phone.example:5555'
 `)
 }
 
@@ -492,6 +531,49 @@ check('control: ssh_write is refused', /approval/i.test(ct[7].lastContent) && !c
 contains('control: an unknown host alias is an error, not a login attempt', ct[8].lastContent, 'Unknown host "evil"')
 const sshSeen = existsSync(fakeSshLog) ? readFileSync(fakeSshLog, 'utf8').trim().split('\n') : []
 check('control: only the two permitted calls reached the ssh client', sshSeen.length === 2 && sshSeen[1].includes('uptime') && !sshSeen.some((l) => /rm -rf|motd/.test(l)), sshSeen.join(' | '))
+}
+
+// --- Android control scenarios (full tier only) -------------------------------
+// The shared testkit has unrelated adb_fake_* tools, so compare the exact names
+// supplied by the control pack rather than treating every adb_* as ours.
+const ADB_READ_INPUT = ['adb_devices', 'adb_info', 'adb_screen', 'adb_ui', 'adb_tap', 'adb_input', 'adb_app', 'adb_logcat']
+const ADB_ROOT = ['adb_shell', 'adb_push', 'adb_pull', 'adb_install']
+const controlAdbTools = (turn) => turn.tools.filter((name) => [...ADB_READ_INPUT, ...ADB_ROOT].includes(name)).sort()
+if (include('control-adb-disabled')) {
+console.log('# control profile: Android packs disabled')
+const off = await run('control', 'control-adb-disabled', [
+  call('tools_ls', { path: '/device/adb' }),                                     // 0
+  call('tools_load', { targets: ['pack:adb', 'pack:adb-root'] }),                  // 1
+  { text: 'done' },                                                              // 2
+], ['Android packs disabled'])
+for (const turn of off) expect('control adb: disabled tools are never offered', controlAdbTools(turn), [])
+contains('control adb: disabled pack is absent from the directory', off[1].lastContent, 'No such path: /device/adb')
+contains('control adb: disabled packs cannot load', off[2].lastContent, /skipped pack:adb:/, /skipped pack:adb-root:/)
+}
+
+if (include('control-adb-main')) {
+console.log('# control-adb profile')
+writeFileSync(fakeAdbLog, '')
+const ad = await run('control-adb', 'control-adb-main', [
+  call('tools_ls', { path: '/' }),                                               // 0
+  call('tools_load', { targets: ['pack:adb'] }),                                  // 1
+  call('adb_ui', { device: 'example-phone' }),                                   // 2
+  call('tools_load', { targets: ['adb_shell'] }),                                 // 3
+  call('adb_shell', { device: 'example-phone', cmd: 'id', root: true }),           // 4
+  { text: 'done' },                                                              // 5
+], ['Android control'])
+expect('control adb: enabled tools start hidden', controlAdbTools(ad[0]), [])
+expect('control adb: pack:adb loads exactly observation and input tools', controlAdbTools(ad[2]), ADB_READ_INPUT)
+contains('control adb: adb_ui parses XML from the fake client', ad[3].lastContent, '[1] Button "设置 & Tools" (120,140)', '[2] ImageButton "Search \\"apps\\"" (950,150)')
+expect('control adb: adb_shell loads before its call-time gate is tested', controlAdbTools(ad[4]), [...ADB_READ_INPUT, 'adb_shell'])
+contains('control adb: root shell is refused without an approval channel', ad[5].lastContent, /approval/i)
+const adbSeen = readFileSync(fakeAdbLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+check('control adb: only the permitted UI call reached the adb client',
+  adbSeen.length === 2
+  && JSON.stringify(adbSeen[0].argv) === JSON.stringify(['connect', 'phone.example:5555'])
+  && JSON.stringify(adbSeen[1].argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'sh'])
+  && adbSeen[1].stdin.includes('uiautomator dump --compressed '),
+  JSON.stringify(adbSeen))
 }
 
 // --- llm profile: small-model classification, cached --------------------------
