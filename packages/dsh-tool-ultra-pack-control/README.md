@@ -279,8 +279,8 @@ command arguments, generated remote argv contain only fixed `shell -T sh` or
 `shell -T su -c sh`; the command script is supplied on stdin. Built-in shell
 arguments are individually POSIX-quoted. Arbitrary `adb_shell` scripts are
 intentional code execution behind the gate. `-T` disables the PTY so screenshots
-and pulls preserve binary bytes using modern adb shell transport. KernelSU is
-used per command; `adb root` is never invoked. No physical device or host bridge
+and pulls preserve binary bytes using modern adb shell transport. KernelSU `su` is
+used per command when `root` is set. If `su` is not on the device PATH but adbd is already uid 0 (a common root wireless adbd), the same script runs in that already-root shell. If `su` is missing and adbd is unprivileged, the original error is returned. `adb root` and `adb unroot` are never invoked. No physical device or host bridge
 approval behavior was verified by the fake-runner tests.
 
 ### Files and limits

@@ -8,7 +8,7 @@ import { localExec, type Exec, type ExecOptions, type ExecResult } from './kit/e
 import { DEFAULT_DENY_PATHS, capText, intArg, isDeniedPath, isReadOnlyCommand, redact, shq } from './kit/policy.js'
 import { readTransfer } from './kit/files.js'
 import { COMMON_DEFAULTS, checkCommonConfig, configBoolean, configInteger, configObject, configText, type CommonConfig } from './kit/config.js'
-import { sessionKey } from './kit/scope.js'
+import { markFailed, sessionKey } from './kit/scope.js'
 import type { ToolSpec } from './kit/spec.js'
 
 export const ADB_TOOL_NAMES = ['adb_devices', 'adb_info', 'adb_screen', 'adb_ui', 'adb_tap', 'adb_input', 'adb_app', 'adb_logcat'] as const
@@ -158,11 +158,31 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
     await connect(alias)
     return run(['-s', serials[alias], ...args], extra)
   }
-  function shell(value: unknown, script: string, root = false, extra: ExecOptions = {}) {
+  function suUnavailable(r: ExecResult): boolean {
+    // Only the missing-binary message. A command that itself exits 127 must not
+    // be retried without su.
+    if (r.code === 0 || r.timedOut) return false
+    return /(?:^|\n|\/sh: |\/bash: )\s*su: (?:inaccessible or )?not found\b|su: command not found\b/i.test(`${r.stderr}\n${r.stdout}`)
+  }
+  async function shell(value: unknown, script: string, root = false, extra: ExecOptions = {}) {
     // adb joins remote argv into a shell command. These argv are all constants;
     // only the stdin script contains data, with every built-in argument quoted.
-    return onDevice(value, ['shell', '-T', ...(root ? ['su', '-c', 'sh'] : ['sh'])], { ...extra, stdin: `${script}\n` })
+    // root prefers KernelSU `su -c sh`. If su is missing and adbd is already
+    // uid 0 (typical for a root wireless adbd), the same script runs there.
+    // Never invoke `adb root` or `adb unroot`.
+    const run = (useSu: boolean, extraExec: ExecOptions = {}) => onDevice(value, ['shell', '-T', ...(useSu ? ['su', '-c', 'sh'] : ['sh'])], { ...extra, ...extraExec, stdin: `${script}\n` })
+    if (!root) return run(false)
+    const first = await run(true, { allowFailure: true })
+    if (!suUnavailable(first)) {
+      if (first.code !== 0 || first.timedOut) markFailed()
+      return first
+    }
+    const id = await onDevice(value, ['shell', '-T', 'sh'], { stdin: 'id -u\n', timeoutMs: 15_000, maxBytes: 4000, allowFailure: true })
+    if (id.code === 0 && !id.timedOut && id.stdout.trim() === '0') return run(false)
+    markFailed()
+    return first
   }
+
   function remotePath(value: unknown): string {
     const path = requiredString(value, 'absolute remote file path')
     if (!path.startsWith('/') || path === '/' || path.endsWith('/') || [...path].some((ch) => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127) || path.split('/').some((s) => s === '.' || s === '..')) throw new Error('Remote file paths must be absolute, without . or .. segments or a trailing slash.')
