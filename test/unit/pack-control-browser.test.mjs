@@ -139,7 +139,7 @@ test('browser: screenshots, byte bounds and filesystem modes', async (ctx) => {
   const f = fake(), t = tools({ exec: f.exec, outputDir })
   const path = (await t.browser_shot.execute(args())).slice('screenshot: '.length)
   assert.deepEqual(await readFile(path), PNG)
-  assert.equal((await stat(path)).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal((await stat(path)).mode & 0o777, 0o600)
   f.browsers.example.screenshot = Buffer.from('not PNG').toString('base64')
   await assert.rejects(t.browser_shot.execute(args()), /not a PNG/)
   f.browsers.example.screenshot = PNG.toString('base64')
