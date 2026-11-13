@@ -9,7 +9,7 @@ import { createServer, connect } from 'node:net'
 import { apply, createTools, gate, BROWSER_TOOL_NAMES, browserPrivateAddress, browserUrl, createSshTransport, localExec } from '../../packages/dsh-tool-ultra-pack-control/lib/index.js'
 import { fakeBrowser, startFakeCdp, PNG } from '../fixtures/pack-control/fake-cdp.mjs'
 const hosts = { example: { target: 'root@browser.example' }, secondary: { target: 'user@secondary.example', port: 2222, identity: '/example/key', browser: { port: 9333 } } }
-const config = { hosts, packs: { ssh: false, browser: true }, multiplex: false }
+const config = { hosts, browserAllowLocalTcp: process.platform === 'win32', packs: { ssh: false, browser: true }, multiplex: false }
 const tools = (opts = {}) => Object.fromEntries(createTools({ ...config, ...opts }).map((t) => [t.name, t]))
 const args = (more = {}) => ({ host: 'example', ...more })
 const ok = (s = '', more = {}) => ({ code: 0, stdout: s, stdoutBytes: Buffer.from(s), stderr: '', truncated: false, timedOut: false, ...more })
@@ -28,10 +28,11 @@ function fake() {
     if (!argv.includes('-L')) return typeof dns === 'string' ? ok(dns) : dns
     if (collision-- > 0) return ok('', { code: 255, stderr: 'bind: Address already in use' })
     if (failure) return failure
-    const [, port, , remotePort] = argv[argv.indexOf('-L') + 1].split(':')
+    const forward = argv[argv.indexOf('-L') + 1].split(':')
+    const [port, remotePort] = forward[0].startsWith('/') ? [forward[0], forward[2]] : [Number(forward[1]), forward[3]]
     const alias = argv.includes('root@browser.example') ? 'example' : 'secondary'
-    const server = noCdp ? { close: async () => {} } : await startFakeCdp({ port: Number(port), remotePort: Number(remotePort), browser: browsers[alias] })
-    active.add(server); ports.push(Number(port))
+    const server = noCdp ? { close: async () => {} } : await startFakeCdp({ ...(typeof port === 'string' ? { socketPath: port } : { port }), remotePort: Number(remotePort), browser: browsers[alias] })
+    active.add(server); ports.push(port)
     opts.onStdout(Buffer.from(argv.at(-1).match(/DSH_FORWARD_[a-f0-9-]+/)[0] + '\n'))
     await new Promise((r) => { if (opts.signal.aborted) r(); else opts.signal.addEventListener('abort', r, { once: true }) })
     await server.close(); active.delete(server)
@@ -60,7 +61,8 @@ test('browser: call gate asks before all mutations; eval cannot be allowlisted',
     assert.equal(decide(e)?.kind, t.risk === 'low' ? undefined : 'ask')
     assert.equal(allowed(e)?.kind, t.name === 'browser_eval' ? 'ask' : undefined)
     assert.ok(!t.describe(e.arguments).includes('sensitive source'))
-    assert.ok(!t.approve?.(e.arguments)?.includes('secret input'))
+    if (t.name === 'browser_type') assert.ok(t.approve(e.arguments).includes('secret input'))
+    if (t.name === 'browser_eval') assert.ok(t.approve(e.arguments).includes('sensitive source'))
   }
 })
 test('browser: URL protocols, credentials, normalized private/mapped IPs', () => {
@@ -99,7 +101,7 @@ test('browser: fake SSH/CDP reads, bounded untrusted snapshots and isolated worl
   }
   for (const { argv, opts } of f.calls) {
     assert.ok(argv.includes('-L'))
-    assert.match(argv[argv.indexOf('-L') + 1], /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/)
+    assert.match(argv[argv.indexOf('-L') + 1], process.platform === 'win32' ? /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/ : /^\/.*\/cdp-\d+\.sock:127\.0\.0\.1:(9222|9333)$/)
     assert.ok(argv.includes('ControlPath=none') && argv.includes('ExitOnForwardFailure=yes'))
     assert.equal(opts.signal.aborted, true)
   }
@@ -107,7 +109,7 @@ test('browser: fake SSH/CDP reads, bounded untrusted snapshots and isolated worl
   assert.ok(second.includes('/example/key') && second.includes('2222'))
   assert.equal(new Set(f.ports).size, f.ports.length)
   // No listening tunnel is left after the callback returns.
-  await new Promise((r, j) => { const s = connect(f.ports[0], '127.0.0.1'); s.on('connect', () => { s.destroy(); j(Error('leaked tunnel')) }); s.on('error', r) })
+  await new Promise((r, j) => { const s = typeof f.ports[0] === 'number' ? connect(f.ports[0], '127.0.0.1') : connect(f.ports[0]); s.on('connect', () => { s.destroy(); j(Error('leaked tunnel')) }); s.on('error', r) })
 })
 test('browser: literal type/click, snapshot generations, host isolation and stale detached nodes', async (ctx) => {
   if (!await available(ctx)) return
@@ -186,7 +188,7 @@ test('browser: no debugging port, unsafe advertised endpoints, CDP errors/timeou
   await assert.rejects(tools({ exec: f.exec }).browser_tabs.execute(args()), /SSH refused/)
   f.fail(undefined); f.collide(1)
   assert.equal(content(await tools({ exec: f.exec }).browser_tabs.execute(args()))[0].tab, 'tab-example')
-  const transport = createSshTransport({ hosts, exec: f.exec })
+  const transport = createSshTransport({ hosts, allowLocalTcp: process.platform === 'win32', exec: f.exec })
   await assert.rejects(transport.withForward('example', 9222, async () => { throw Error('callback failed') }), /callback failed/)
   assert.equal(f.active.size, 0)
 })
@@ -215,7 +217,7 @@ test('browser: DSH adapter advertises both hosts and gate denies mutations befor
   assert.deepEqual(packs[0].items().map((i) => i.id), Object.keys(hosts))
   for (const name of ['browser_open','browser_click','browser_type','browser_key','browser_eval']) {
     const t = registered.find((t) => t.name === name)
-    assert.equal((await hooks['tools/pre-execute']({ name, arguments: args() }, () => t.execute(args()))).kind, 'ask')
+    assert.equal((await hooks['tools/pre-execute']({ name, arguments: args() }, () => t.execute(args()))).kind, 'deny')
   }
   assert.ok(registered.every((t) => t.isConcurrencySafe() === false))
   assert.equal(calls, 0)
@@ -418,4 +420,21 @@ test('browser refs: failed backend-ID snapshot clears old refs and releases temp
   await assert.rejects(t.browser_click.execute(args({ ref })), /Stale or unknown/)
   assert.equal(browser.liveObjects, 0)
   assert.equal(browser.calls.some((m) => m.method.startsWith('Input.')), false)
+})
+
+test('browser refs: session-local snapshots and selected tabs cannot cross into another session', async (ctx) => {
+  const { inCall } = await import('../../packages/dsh-tool-ultra-pack-control/lib/kit/scope.js')
+  const { browser, t } = await memory(ctx)
+  const as = (session, fn) => inCall({ session, failed: false }, fn)
+  const snapshot = (session) => as(session, async () => JSON.parse(await t.browser_page.execute(args({ mode: 'refs', tab: 'tab-example' }))).content.match(/"ref":"([^"]+)"/)[1])
+  const a = await snapshot('a')
+  await assert.rejects(as('b', () => t.browser_click.execute(args({ ref: a }))), /Stale/)
+  await snapshot('b')
+  const prompt = as('a', () => t.browser_click.approve(args({ ref: a })))
+  assert.match(prompt, /tab-example/)
+  assert.match(prompt, /Example input/)
+  await as('a', () => t.browser_click.execute(args({ ref: a })))
+  browser.tabs.push({ targetId: 'tab-two', type: 'page', title: 'Second', url: 'https://page.example/second' })
+  await assert.rejects(as('c', () => t.browser_page.execute(args())), /Select an existing tab/)
+  await as('a', () => t.browser_page.execute(args()))
 })

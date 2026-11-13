@@ -5,7 +5,7 @@ SSH, Android, remote desktop and browser control for [Tool Ultra](https://github
 | Pack | Tools | Risk |
 | --- | --- | --- |
 | `ssh` (on by default) | `ssh_hosts`, `ssh_sys`, `ssh_read`, `ssh_log` | low |
-| `ssh-exec` (off by default) | `ssh_run`, `ssh_write`, `ssh_put` (high), `ssh_get` (medium) | asks first |
+| `ssh-exec` (off by default) | `ssh_run`, `ssh_write`, `ssh_put`, `ssh_get` (high) | asks first |
 | `adb` (off by default) | `adb_devices`, `adb_info`, `adb_screen`, `adb_ui`, `adb_logcat`; `adb_tap`, `adb_input`, `adb_app` | low / medium |
 | `adb-root` (off by default) | `adb_shell`, `adb_push`, `adb_pull`, `adb_install` | high |
 | `browser` (off by default) | tabs, page text/refs, screenshots; open, click, type, key; eval | low / medium / high; mutations ask, eval always asks |
@@ -30,11 +30,13 @@ Several layers, each of which can be tightened on its own.
 
 - **Packs are opt-in.** `ssh-exec` is off until the config turns it on. `readOnly: true` removes every tool that is not low risk, whatever `packs` says.
 - **Hosts are aliases.** A model passes `nix`; the config says what that means. An unknown name is an error, a target that could be read as an ssh option (`-oProxyCommand=...`) is refused when the config loads, and no password is ever asked for (`BatchMode`).
-- **Changing calls ask.** `ssh_run`, `ssh_write` and `ssh_put` go through a `tools/pre-execute` gate that returns `{ kind: 'ask' }`, which DSH routes to the user. A session with nobody to ask is refused, so an unattended bot cannot use them unless you list its session id under `allow`. A command that is plainly read-only (`uptime`, `ls`, `systemctl status`, `journalctl -u x`, ...) runs without asking; anything with `;`, `|`, `>`, `$(...)`, a glob, an unknown program or a write option is not, and neither is any run with `cwd`.
+- **Changing calls ask.** The `tools/pre-execute` gate resolves requests through DSH's approval service and retains a one-use permit bound to the execution token, session, tool, exact arguments and approval target. The registered executor checks this permit again. Missing/renamed hooks, changed arguments, unavailable approval and replay fail closed. Plain known reads (`uptime`, `ls`, `systemctl status`, `journalctl -u x`, ...) may run without approval; unknown options, option=value, systemctl value-taking flags, follow modes, shell syntax and `cwd` require approval. `allow` can waive ordinary shell/browser/ADB-input questions, but cannot waive SSH write/upload, ADB push/install/root, desktop mutations or browser eval. Arguments over 4096 JSON characters and commands over 300 characters require approval even with `allow`.
+- **Approval shows the action.** Localized prompts contain complete raw command/JS/text/file bodies, URLs, paths, keys, refs and window IDs. They are never redacted or shortened by this package. Browser ref prompts also show the bound tab and snapshot element. The durable approval reason and control audit use separate body-free summaries. Treat approval displays as sensitive.
 - **No shell on this side.** The ssh client is started with an argument vector. On the remote side every script runs as `sh -c '<script>'` with quoted arguments, and file contents travel on stdin, not in the command line.
-- **Credentials stay out of view.** The read tools refuse `/etc/shadow`, SSH private keys, host keys and `/proc/*/environ` (path segments such as `..` are collapsed first; add more with `denyPaths`), and private keys or `password=...` style values in any output are masked. This is a guard against reading them by accident, not a boundary: a command someone approved can still do anything, and a symlink gets around a path check.
-- **Files move through one folder.** `ssh_get` saves and `ssh_put` reads only inside `transferDir` (default `~/dsh-transfers`), by plain file name, never overwriting, up to `maxTransferBytes`.
-- **A record.** Every call that ran is appended to `<DSH_HOME>/tool-manager/control-audit.jsonl` (host, a redacted one-line summary, result, time; never file contents). Refused calls never ran and are not in it.
+- **Credentials stay out of view.** The read tools refuse `/etc/shadow`, SSH private keys, host keys and `/proc/*/environ` / `/proc/*/task/*/environ` (path segments such as `..` are collapsed first; add more with `denyPaths`), and private keys or `password=...` style values in any output are masked. This is a guard against reading them by accident, not a boundary: a command someone approved can still do anything, and a symlink gets around a path check.
+- **Files move through one folder.** `ssh_get` saves and `ssh_put` reads only inside `transferDir` (default `~/dsh-transfers`), by plain file name, never overwriting, up to `maxTransferBytes`. Upload sources are bounded regular-file descriptors with before/after identity and no-follow checks shared with ADB. New files use 0600 and directories 0700 on POSIX. SSH connection reuse uses an unpredictable private temporary directory whose ownership/mode are checked.
+- **A record.** Approval/rejection and execution results are appended to `<DSH_HOME>/tool-manager/control-audit.jsonl` as separate `event` values (`approved`, `denied`, `result`). Paths and requested URLs are recorded; command/JS source, input/clipboard text, UI labels and file bodies are omitted. A nonzero transport exit or timeout fails the registered DSH tool and records `ok: false`, even when a plain spec formats it as text. New audit files use 0600. This control audit is separate from DSH's own session/approval logs.
+- **Read-only means no intended mutation.** It does not mean non-sensitive: root file reads, logged-in page text, clipboard reads and screenshots can expose secrets. `readOnly` preserves low-risk observation tools; it is not a confidentiality sandbox. Use `disable` and host capability whitelists to narrow access.
 
 Pair this pack with `@lvy-jsd/dsh-tool-ultra-risk-gate`: it asks before a high-risk tool is loaded, this pack asks before it is used.
 
@@ -43,6 +45,32 @@ Pair this pack with `@lvy-jsd/dsh-tool-ultra-risk-gate`: it asks before a high-r
 See [`cordis.patch.yml`](cordis.patch.yml): `packs`, `readOnly`, `disable`, `hosts`, `allow`, `auditFile`, `transferDir`, `denyPaths`, plus `sshBin`, `multiplex`, `connectTimeoutS`, `timeoutMs`, `maxBytes`, `maxChars`, `maxTransferBytes`.
 
 `target` can be `user@host` or a Host alias from `~/.ssh/config`, so keys, jump hosts and ports can live there.
+
+Legacy flat settings remain valid. Optional `packConfig.ssh`, `.adb`, `.desktop`
+and `.browser` objects override the corresponding package's inherited settings
+(`ssh` also configures `ssh-exec`; `adb` also configures `adb-root`). An override
+such as `hosts` replaces that map. Browser inherits legacy numeric limits clamped
+to its own supported range, so a shared 50 MB transfer cap or 600 s timeout does
+not prevent any pack from starting. Explicit browser overrides are validated
+strictly. Disabled packs do not construct or validate their transport.
+
+```yaml
+maxTransferBytes: 50000000  # old flat setting still works with browser enabled
+packConfig:
+  browser: { maxTransferBytes: 10000000, timeoutMs: 30000 }
+hosts:
+  workstation:
+    target: user@desktop.example
+    packs: [desktop, browser]  # exact whitelist, including exclusion from SSH reads
+  server:
+    target: root@server.example
+    packs: [ssh, ssh-exec]
+```
+
+Omitting `hosts.<alias>.packs` preserves legacy access from every enabled host
+pack; an empty list grants none. Pack-local host tables can also separate hosts.
+`allow` matches `agent.session.id`, with the agent ID and `*` as fallbacks.
+
 
 ## Remote desktop: `desktop`
 
@@ -197,8 +225,7 @@ and [ydotool](https://github.com/ReimuNotMoe/ydotool) for protocol/version requi
 ### Approval, files and boundaries
 
 All focus/input/clipboard-write calls ask through the existing `tools/pre-execute`
-gate **before even the SSH probe runs**. `allow` may waive questions explicitly,
-per tool/session, exactly like SSH/ADB. A session without an approval channel is
+gate **before even the SSH probe runs**. Desktop mutation questions cannot be waived by `allow`. A session without an approval channel is
 refused. `readOnly: true` keeps screenshot, window list and clipboard read only;
 clipboard read/write are separate tools to preserve this distinction.
 
@@ -237,7 +264,7 @@ is proven by these fake-host tests.
 
 ## For other front ends
 
-`createTools(options)` returns plain objects (`name`, `pack`, `risk`, `description`, `parameters`, `approve`, `describe`, `execute`) with no DSH types in them, and `gate(specs, allow)` is the approval decision. Anything that can call a function can host them. `options.exec` replaces the process runner, which is how the tests run without a network.
+`createTools(options)` returns plain objects (`name`, `pack`, `risk`, `description`, `parameters`, `approve`, `describe`, `execute`) with no DSH types in them, and `gate(specs, allow)` is the approval decision. The enforced adapter requires DSH to provide an execution token and approval service; hosts without them refuse calls requiring approval. These are low-level implementations, not an approval-enforcing endpoint. An adapter must enforce approval and provide trusted per-session scope; use the DSH `apply` adapter for the enforced boundary. Do not expose raw specs as an MCP server or bridge endpoint. `options.exec` replaces the process runner, which is how the tests run without a network.
 
 ## License
 
@@ -260,7 +287,7 @@ serials:
   example-phone: 'phone.example:5555'
   example-secondary: 'example-serial'
 adbConnect: true
-adbAskInput: false
+adbAskInput: true
 adbUiTtlMs: 30000
 transferDir: /path/to/transfers
 outputDir: /path/to/screenshots
@@ -311,12 +338,12 @@ Examples (these are tool arguments, not shell commands):
 
 The first object is for `adb_info`, `adb_screen` or `adb_ui`; the following
 objects demonstrate tap, input, app, shell and pull arguments respectively.
-Call `adb_ui` before tapping by number/text. Snapshots are separate per device,
-expire after `adbUiTtlMs`, and are invalidated by input, app changes, shell,
+Call `adb_ui` before tapping by number/text. Snapshots are separate per session and device,
+expire after `adbUiTtlMs`, and are invalidated by physical-device input, app changes, shell,
 upload and install (even if execution fails). Ambiguous labels require a fresh
 snapshot or explicit coordinates. External UI changes can still make a reference
 stale before its timeout; refresh whenever the phone changes. UI dumps require
-uiautomator and expose only the accessibility hierarchy; custom canvas surfaces
+uiautomator and return the accessibility hierarchy in a JSON `untrusted_android_content` envelope; custom canvas surfaces
 may need screenshot plus coordinates. XML parsing rejects DTDs/external entities,
 malformed/truncated dumps and snapshots too large to return in full.
 
@@ -335,9 +362,8 @@ pull always request call approval, even for `id`/`cat`. Non-root shell uses the 
 conservative read-only check; unknown commands and shell metacharacters ask.
 Push and install always ask. `adb_pull` is statically high risk because its
 `root` option can read protected files, so it requires individual loading via
-the risk gate; ordinary non-root pulls need no additional call approval.
-`adbAskInput: true` also asks for taps/input and app start/stop. The shared per-session
-`allow` configuration can explicitly waive any of these questions.
+the risk gate; ordinary non-root pulls need no additional call approval. SSH downloads are also high risk, since the configured SSH user may be root.
+`adbAskInput` defaults to true for taps/input and app start/stop; false is an explicit administrator opt-out. `allow` can waive those input questions and non-root shell questions, but never push/install or root shell/pull approval.
 `readOnly: true` removes all medium/high tools, including app current/list because
 they share one medium-risk tool. The packs work independently of each other.
 
@@ -462,7 +488,7 @@ no GUI program and need no root browser or `--no-sandbox` workaround.
 Every call requires `host`. `tab` is the **stable tab ID** from `browser_tabs`,
 not its display row number. With exactly one page tab it is selected
 implicitly; with several tabs, explicitly select one. Subsequent calls reuse
-the selected tab per host. If it closes, refresh the list and select again.
+the selected tab per session and host. If it closes, refresh the list and select again.
 
 | Tool | Additional arguments | Result / risk |
 | --- | --- | --- |
@@ -480,7 +506,7 @@ approval. The call gate applies after loading: `allow` may waive the medium-risk
 questions as with desktop, but **cannot waive `browser_eval` approval**. With no
 approval channel, eval is refused even for an allowlisted unattended session.
 `readOnly` removes every browser mutation/eval tool; `disable` works normally.
-Tool/audit descriptions never include typed text, URLs or JavaScript source.
+Audit descriptions include requested URLs and tab/ref IDs, but omit typed text and JavaScript source. Approval displays include their complete raw content.
 
 Start with `browser_tabs`, then `browser_page(host, tab, mode="refs")`. Copy a
 ref exactly, such as `a1b2c3d4:3`: the suffix is the element number and the prefix
@@ -492,7 +518,7 @@ removed nodes, disabled/covered elements and lost focus refuse input rather
 than re-finding another matching element. A page can still change between the
 last geometry check and dispatch; inspect again after consequential input.
 
-Snapshot references are stored **locally**, keyed by host, tab and generation.
+Snapshot references are stored **locally**, keyed by session, host, tab and generation. Calls without an identified session cannot use the registered reference tools.
 Snapshot code runs in an isolated CDP world and uses `DOM.describeNode` to save
 only the elements' `backendNodeId` values, plus the main frame/loader identity.
 Each click/type creates its own isolated context and uses `DOM.resolveNode` with
@@ -512,8 +538,15 @@ for the resulting title/URL/content instead of assuming the page has loaded.
 
 ### Tunnels, limits and trust
 
-Each call owns one **foreground** SSH process with a dynamically chosen local
-port and `-L 127.0.0.1:PORT:127.0.0.1:REMOTE_PORT`. Both ends are loopback.
+Each call owns one **foreground** SSH process. On POSIX it forwards
+`-L PRIVATE_SOCKET:127.0.0.1:REMOTE_PORT`: the local Unix socket lives in a
+fresh 0700 temporary directory, with `StreamLocalBindMask=0177`. HTTP discovery
+and bounded WebSocket frames use that socket directly, without a local TCP CDP
+listener. Cleanup removes the directory after the owned SSH process exits.
+On Windows calls fail closed unless `browserAllowLocalTcp: true` explicitly
+opts in to `-L 127.0.0.1:PORT:127.0.0.1:REMOTE_PORT`. This unauthenticated
+loopback fallback requires all local users to be trusted. The remote
+Chrome loopback endpoint likewise requires a trusted remote host.
 The existing SSH transport supplies alias validation, authentication, identity,
 SSH port, jump-host configuration and timeouts. Forwarding is deliberately
 **not multiplexed**, even if ordinary SSH commands use ControlMaster: a shared
@@ -524,8 +557,8 @@ in `finally`. DSH exit closes the stdin pipe so the remote keeper and SSH sessio
 also end. SSH configs must permit a noninteractive remote POSIX shell, `cat`
 and local forwarding; interactive login banners must not block the session.
 
-The OS chooses the port; `ExitOnForwardFailure` confirms SSH owns the bind before
-CDP connects. Bind collisions retry up to three times **before** running any CDP
+`ExitOnForwardFailure` confirms SSH owns the bind before CDP connects. The
+Windows fallback reserves an OS-selected port before SSH binds it. Bind collisions retry up to three times **before** running any CDP
 operation; page actions are never automatically replayed. Calls serialize per
 host to preserve snapshot/input order; different aliases can run independently.
 CDP discovery never follows redirects or an advertised external WebSocket host:
@@ -549,14 +582,15 @@ network isolation if destination restrictions must be enforced.
 Page titles, URLs, snapshots, eval values and CDP page errors are untrusted data.
 Model-facing page output is one JSON envelope marked
 `trust: "untrusted_browser_content"`, with an escaped `content` string and a
-`truncated` flag. Page strings never enter tool schemas, descriptions, approval
-reasons or audit summaries. This separates data from instructions; it cannot
+`truncated` flag. Page strings never enter tool schemas, descriptions or
+audit summaries. Approval displays may show the snapshot label as target data, never as policy. This separates data from instructions; it cannot
 make arbitrary page text safe to obey.
 
 Output is capped by `maxChars` (default 20000, allowed 128–200000), including the
 JSON envelope. CDP requests/replies are checked against `maxBytes` (default 16 MB,
-range 1 KB–64 MB); discovery is limited to 64 KB. The WebSocket implementation
-assembles a message before the application checks its size. `timeoutMs`
+range 1 KB–64 MB); discovery is limited to 64 KB. The POSIX Unix client rejects oversized advertised frames and bounds fragmented
+messages before assembling them; the Windows built-in WebSocket assembles a
+message before the application checks its size. `timeoutMs`
 (default CDP 30 s; allowed 100 ms–120 s) bounds CDP requests and the SSH tunnel's
 whole lifetime (SSH default 60 s when unset). Screenshots default to at most
 10 MB (`maxTransferBytes`, range 1–40 MB) and must have a PNG signature. They use
@@ -586,6 +620,6 @@ It skips listener/child-process cases when sandbox permissions prohibit them;
 an in-memory CDP test still executes the actual isolated-world snapshot/input
 scripts. For hosts that cannot fork the Node test runner, use
 `node --test --test-isolation=none ...` on Node versions supporting that option.
-The full-tier e2e profile uses two fake SSH hosts and the real built-in WebSocket
+The full-tier e2e profile uses two fake SSH hosts and the actual Unix/built-in WebSocket
 client, checks local screenshots and proves refused calls never reach SSH. It
 requires a complete DSH installation and does not touch a real browser.

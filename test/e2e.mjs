@@ -318,11 +318,13 @@ appendFileSync(${JSON.stringify(fakeBrowserLog)}, JSON.stringify({ argv }) + '\\
 if (!['root@browser.example', 'user@secondary.example'].includes(target)) throw Error('Unexpected fake browser host')
 if (argv.includes('-L')) {
   const spec = argv[argv.indexOf('-L') + 1].split(':')
-  if (spec[0] !== '127.0.0.1' || spec[2] !== '127.0.0.1') throw Error('Non-loopback forward')
+  const unix = spec[0].startsWith('/')
+  if (unix ? spec[1] !== '127.0.0.1' : (spec[0] !== '127.0.0.1' || spec[2] !== '127.0.0.1')) throw Error('Non-loopback forward')
+  if (unix && !argv.includes('StreamLocalBindMask=0177')) throw Error('Non-private Unix forward')
   if (!argv.includes('ExitOnForwardFailure=yes') || !argv.includes('ControlPath=none')) throw Error('Unowned forward')
   const remotePort = target === 'root@browser.example' ? 9222 : 9333
-  if (Number(spec[3]) !== remotePort) throw Error('Wrong remote CDP port')
-  const server = await startFakeCdp({ port: Number(spec[1]), remotePort })
+  if (Number(spec[unix ? 2 : 3]) !== remotePort) throw Error('Wrong remote CDP port')
+  const server = await startFakeCdp({ ...(unix ? { socketPath: spec[0] } : { port: Number(spec[1]) }), remotePort })
   process.stdout.write(command.match(/DSH_FORWARD_[a-f0-9-]+/)[0] + '\\n')
   process.stdin.resume()
   process.stdin.on('end', async () => { await server.close() })
@@ -339,6 +341,7 @@ if (argv.includes('-L')) {
   name: '@lvy-jsd/dsh-tool-ultra-pack-control'
   config:
     packs: { ssh: false, browser: true }
+    browserAllowLocalTcp: ${process.platform === 'win32'}
     sshBin: ${fakeBrowserSsh}
     multiplex: false
     outputDir: ${browserOutputDir}
@@ -728,7 +731,7 @@ contains('control browser: unknown alias fails without SSH', bt[13].lastContent,
 const seen = existsSync(fakeBrowserLog) ? readFileSync(fakeBrowserLog, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []
 check('control browser: exactly four reads reach SSH; refused mutations cannot resolve or connect', seen.length === 4 && seen.every((s) => s.argv.includes('-L')), JSON.stringify(seen))
 expect('control browser: both fake hosts are addressed', seen.map((s) => s.argv[s.argv.indexOf('--') + 1]), ['root@browser.example','root@browser.example','user@secondary.example','user@secondary.example'])
-check('control browser: every listener is loopback and has an owned SSH process', seen.every((s) => /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/.test(s.argv[s.argv.indexOf('-L') + 1]) && s.argv.includes('ControlPath=none')), JSON.stringify(seen))
+check('control browser: every listener is private Unix or loopback and has an owned SSH process', seen.every((s) => (process.platform === 'win32' ? /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/ : /^\/.*\/cdp-\d+\.sock:127\.0\.0\.1:(9222|9333)$/).test(s.argv[s.argv.indexOf('-L') + 1]) && s.argv.includes('ControlPath=none') && s.argv.includes('StreamLocalBindMask=0177')), JSON.stringify(seen))
 }
 
 // --- Remote desktop control scenarios (full tier only) -----------------------

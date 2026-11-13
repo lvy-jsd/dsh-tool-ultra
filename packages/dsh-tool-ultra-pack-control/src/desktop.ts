@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createSshTransport, type SshOptions } from './ssh.js'
 import { capText, redact, shq } from './kit/policy.js'
+import { markFailed } from './kit/scope.js'
 import type { ExecResult } from './kit/exec.js'
 import type { ToolSpec } from './kit/spec.js'
 import { checkDesktopSession, desktopProbeScript, selectDesktopSession, type DesktopBackend } from './desktop-session.js'
@@ -46,6 +47,7 @@ export function desktopCombo(value: unknown): { modifiers: string[], key: string
 }
 
 function failure(r: ExecResult, maxChars: number): string {
+  markFailed()
   return capText(redact(`${r.timedOut ? 'SSH desktop command timed out' : `SSH desktop exit ${r.code ?? 'not started'}`}${r.truncated ? ' [output truncated]' : ''}\n${r.stderr || r.stdout}`), maxChars)
 }
 
@@ -158,10 +160,10 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
       },
     },
     {
-      name: 'desktop_focus', pack: 'desktop', risk: 'medium',
+      name: 'desktop_focus', pack: 'desktop', risk: 'medium', alwaysAsk: true,
       description: 'Focus a remote desktop window by native id from desktop_windows. Always asks before changing focus; titles are not accepted.',
       parameters: { host: hostParam, window: { type: 'string', required: true, description: 'Exact native window id, never a title/pattern.' } },
-      describe: (a) => summary(a?.host, 'focus desktop window'), approve: (a) => summary(a?.host, 'focus desktop window'),
+      describe: (a) => summary(a?.host, `focus desktop window ${a?.window}`), approve: (a) => summary(a?.host, `focus desktop window ${a?.window}`),
       async execute(a) {
         const id = textArg(a?.window, 'a window id', 32)
         if (!/^(?:0x[\da-fA-F]{1,16}|[1-9]\d{0,15})$/.test(id)) throw new Error('Give a native window id from desktop_windows, not a title or pattern.')
@@ -180,10 +182,10 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
       },
     },
     {
-      name: 'desktop_click', pack: 'desktop', risk: 'medium',
+      name: 'desktop_click', pack: 'desktop', risk: 'medium', alwaysAsk: true,
       description: 'Click remote desktop coordinates over SSH. Always asks. On Wayland needs an already configured ydotool daemon; never starts it or uses sudo.',
       parameters: { host: hostParam, x: { type: 'integer', required: true, description: 'Desktop x coordinate.' }, y: { type: 'integer', required: true, description: 'Desktop y coordinate.' }, button: { type: 'string', enum: ['left', 'middle', 'right'], description: 'Default left; one click.' } },
-      describe: (a) => summary(a?.host, 'click desktop'), approve: (a) => summary(a?.host, `click desktop at ${a?.x},${a?.y}`),
+      describe: (a) => summary(a?.host, `click desktop ${a?.x},${a?.y} (${a?.button ?? 'left'})`), approve: (a) => summary(a?.host, `click desktop at ${a?.x},${a?.y} (${a?.button ?? 'left'})`),
       async execute(a) {
         const x = String(coordinate(a?.x)), y = String(coordinate(a?.y)), button = a?.button ?? 'left'
         if (!['left', 'middle', 'right'].includes(button)) throw new Error('Button must be left, middle or right.')
@@ -201,10 +203,10 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
       },
     },
     {
-      name: 'desktop_type', pack: 'desktop', risk: 'medium',
+      name: 'desktop_type', pack: 'desktop', risk: 'medium', alwaysAsk: true,
       description: 'Type literal UTF-8 text into the focused remote desktop window. Always asks; newline/tab can activate UI. Does not paste or modify the clipboard.',
       parameters: { host: hostParam, text: { type: 'string', required: true, description: 'Literal text, max 20000 UTF-8 bytes.' } },
-      describe: (a) => summary(a?.host, `type ${Buffer.byteLength(String(a?.text ?? ''))} bytes on desktop`), approve: (a) => summary(a?.host, `type ${Buffer.byteLength(String(a?.text ?? ''))} bytes in the focused window (newlines may submit)`),
+      describe: (a) => summary(a?.host, `type ${Buffer.byteLength(String(a?.text ?? ''))} bytes on desktop`), approve: (a) => summary(a?.host, `type in the focused window (newlines may submit):\n${String(a?.text ?? '')}`),
       async execute(a) {
         const text = textArg(a?.text, 'text', 20_000)
         const b = await session(a?.host), cmd = b.kind === 'x11' ? 'xdotool' : 'wtype'
@@ -213,10 +215,10 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
       },
     },
     {
-      name: 'desktop_key', pack: 'desktop', risk: 'medium',
+      name: 'desktop_key', pack: 'desktop', risk: 'medium', alwaysAsk: true,
       description: 'Send one key combination to the focused remote desktop window, e.g. ctrl+l, alt+Tab, Return. Always asks; Wayland requires virtual-keyboard support for wtype.',
       parameters: { host: hostParam, combo: { type: 'string', required: true, description: 'ctrl/alt/shift/super + letter, digit, F1-F24 or navigation key.' } },
-      describe: (a) => summary(a?.host, 'desktop key combo'), approve: (a) => summary(a?.host, `send desktop key ${capText(redact(String(a?.combo ?? '')), 100)}`),
+      describe: (a) => summary(a?.host, `desktop key combo ${a?.combo}`), approve: (a) => summary(a?.host, `send desktop key ${String(a?.combo ?? '')}`),
       async execute(a) {
         const { modifiers, key } = desktopCombo(a?.combo)
         const b = await session(a?.host), cmd = b.kind === 'x11' ? 'xdotool' : 'wtype'
@@ -237,10 +239,10 @@ export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
       },
     },
     {
-      name: 'desktop_clipboard_set', pack: 'desktop', risk: 'medium',
+      name: 'desktop_clipboard_set', pack: 'desktop', risk: 'medium', alwaysAsk: true,
       description: 'Replace remote desktop clipboard text over SSH. Always asks. An empty string clears text; clipboard ownership may need a background helper.',
       parameters: { host: hostParam, text: { type: 'string', required: true, description: 'Literal UTF-8 clipboard text, max 20000 bytes.' } },
-      describe: (a) => summary(a?.host, `write ${Buffer.byteLength(String(a?.text ?? ''))} clipboard bytes`), approve: (a) => summary(a?.host, 'replace desktop clipboard text'),
+      describe: (a) => summary(a?.host, `write ${Buffer.byteLength(String(a?.text ?? ''))} clipboard bytes`), approve: (a) => summary(a?.host, `replace desktop clipboard text:\n${String(a?.text ?? '')}`),
       async execute(a) {
         const text = textArg(a?.text, 'clipboard text', 20_000, true)
         const b = await session(a?.host), cmd = b.kind === 'x11' ? 'xclip' : 'wl-copy'
