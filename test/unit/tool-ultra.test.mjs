@@ -110,6 +110,47 @@ test('a declared pinned tool is always on and not listed', (t) => {
   assert.equal(catalog.get().tools.has('always_on'), false, 'pinned tools are not listed')
 })
 
+test('a high-risk tool ignores its own pinned declaration (no risk gate)', async (t) => {
+  const definitions = new Map([
+    ['risky_pinned', { name: 'risky_pinned', description: 'Deletes things.', parameters: {}, toolUltra: { risk: 'high', pinned: true } }],
+  ])
+  const { catalog, agent } = host(t, definitions)
+  // It is high risk, so its self-declared pin is ignored: not visible without a load.
+  assert.ok(!catalog.allowFor(agent).includes('risky_pinned'), 'not visible without a load')
+  assert.equal(catalog.get().tools.get('risky_pinned').highRisk, true, 'still high risk')
+  // Without a gate, the load is refused through the existing path.
+  const result = await catalog.load(agent, ['risky_pinned'])
+  assert.match(result, /high risk, no risk gate/)
+})
+
+test('a self-declared low risk cannot lower an explicit high annotation', (t) => {
+  const definitions = new Map([
+    ['annotated', { name: 'annotated', description: 'Does things.', parameters: {}, toolUltra: { risk: 'low' } }],
+  ])
+  const { catalog } = host(t, definitions)
+  // A runtime annotation marks it high risk; the self-declared low must not lower it.
+  catalog.annotate('annotated', { risk: 'high' })
+  assert.equal(catalog.get().tools.get('annotated').highRisk, true, 'the explicit annotation wins')
+})
+
+test('a self-declared high risk marks an ordinary tool high risk', (t) => {
+  const definitions = new Map([
+    ['plain', { name: 'plain', description: 'Does things.', parameters: {}, toolUltra: { risk: 'high' } }],
+  ])
+  const { catalog } = host(t, definitions)
+  assert.equal(catalog.get().tools.get('plain').highRisk, true, 'the self-declaration raises the risk')
+})
+
+test('a user-pinned high-risk tool stays pinned', (t) => {
+  const definitions = new Map([
+    ['user_pinned', { name: 'user_pinned', description: 'Deletes things.', parameters: {}, toolUltra: { risk: 'high', pinned: true } }],
+  ])
+  const { catalog, agent } = host(t, definitions)
+  // The user explicitly pins it in the settings; that wins over the high-risk rule.
+  catalog.updateConfig({ pinned: ['user_pinned'] })
+  assert.ok(catalog.allowFor(agent).includes('user_pinned'), 'the user pin wins')
+})
+
 test('user settings override a toolUltra declaration', (t) => {
   const definitions = new Map([
     ['memory_note', { name: 'memory_note', description: 'Store a note.', parameters: {}, toolUltra: { category: 'memory' } }],

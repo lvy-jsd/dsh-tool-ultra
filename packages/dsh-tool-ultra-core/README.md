@@ -225,16 +225,28 @@ ctx.tools.register({
   name: 'memory_note',
   description: 'Store a note.',
   parameters: { ... },
-  toolUltra: { category: '/memory', risk: 'high', pinned: true },
+  toolUltra: { category: '/memory', risk: 'low' },
 })
 ```
 
 Fields: `category` (name, with or without a leading `/`), `risk`
 (`"low"` | `"medium"` | `"high"`; `"high"` marks the tool high risk for the
 risk gate), `pinned` (always-on, not listed in the directory). Invalid values
-are ignored with a log warning. Precedence: user settings (`metadata.json`,
-`settings.json`) > `toolUltra` > `package.json` / `annotate()` > classifiers >
-structural fallback.
+are ignored with a log warning.
+
+Two rules keep the self-declaration from overruling an explicit decision:
+
+- `risk` can only raise the risk, never lower it: the declaration is read
+  before `package.json` / `annotate()` and the panel edits, so any explicit
+  annotation wins over it.
+- A high-risk tool (from any source: `settings.json` `highRisk`,
+  `package.json` / `annotate()`, or its own `risk: "high"`) ignores its own
+  `pinned: true`: pinning would keep it always-on and bypass the risk gate's
+  approval. A pin the user sets in `settings.json` still applies.
+
+Precedence: user settings (`metadata.json`, `settings.json`) >
+`package.json` / `annotate()` > `toolUltra` > classifiers > structural
+fallback.
 
 ### Tool packs
 

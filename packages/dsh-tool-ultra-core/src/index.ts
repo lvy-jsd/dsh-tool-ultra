@@ -216,12 +216,38 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   // tool, registered the same name) are warned about once per name, not on
   // every rebuild, for the same reason.
   const warnedShadowed = new Set<string>()
+  // The validation result, cached per schema object: the catalog is rebuilt
+  // often and the schema objects are stable, so re-parsing them on every
+  // rebuild is wasted work.
+  const declaredMetaCache = new WeakMap<ToolSchema, ToolUltraMeta>()
   function declaredMeta(schema: ToolSchema): ToolUltraMeta {
-    if (schema.toolUltra === undefined) return {}
+    const cached = declaredMetaCache.get(schema)
+    if (cached) return cached
     const once = warnedToolUltra.has(schema.name) ? undefined : {
       warn: (message: string) => { warnedToolUltra.add(schema.name); logger.warn?.(message) },
     }
-    return pickToolUltra(schema.toolUltra, schema.name, once)
+    const meta = schema.toolUltra === undefined ? {} : pickToolUltra(schema.toolUltra, schema.name, once)
+    declaredMetaCache.set(schema, meta)
+    return meta
+  }
+
+  /**
+   * True when the tool is high risk from any source: the settings `highRisk`
+   * list, a package declaration, a runtime annotate() call, the tool's own
+   * toolUltra declaration, or a panel edit. A self-declaration can only raise
+   * the risk, so it is merged first and every explicit annotation wins over it.
+   */
+  function isHighRisk(name: string): boolean {
+    if (settings.effective().highRisk.includes(name)) return true
+    manifestAnnotations ??= readManifestAnnotations(ctx, logger)
+    const merged: ToolMeta = {}
+    const schema = ctx.tools.schemas().find((s) => s.name === name)
+    if (schema) Object.assign(merged, declaredMeta(schema))
+    for (const annotation of [...manifestAnnotations, ...registries.annotations, ...metadata.annotations()]) {
+      const hit = typeof annotation.match === 'string' ? annotation.match === name : annotation.match.test(name)
+      if (hit) Object.assign(merged, annotation.meta)
+    }
+    return merged.risk === 'high'
   }
 
   const pinnedSet = () => {
@@ -230,11 +256,14 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     for (const n of current.unpin) set.delete(n)
     for (const n of ENTRY_TOOLS) set.add(n)
     // A tool's own toolUltra.pinned declaration applies only when the user has
-    // not set the tool explicitly: settings win over declarations.
+    // not set the tool explicitly: settings win over declarations. A high-risk
+    // tool never pins itself, whatever its declaration says: pinning would keep
+    // it always-on and bypass the risk gate's approval.
     for (const schema of ctx.tools.schemas()) {
       const declared = declaredMeta(schema)
       if (declared.pinned === undefined) continue
       if (current.pinned.includes(schema.name) || current.unpin.includes(schema.name)) continue
+      if (isHighRisk(schema.name)) continue
       if (declared.pinned) set.add(schema.name)
       else set.delete(schema.name)
     }
@@ -291,19 +320,20 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   }
 
   /**
-   * The declared metadata only: package.json first, runtime annotate() after,
-   * then the tool's own toolUltra declaration, with panel edits left out so
-   * the UI can tell the two apart.
+   * The declared metadata only: the tool's own toolUltra declaration first,
+   * then package.json, then runtime annotate(), with panel edits left out so
+   * the UI can tell the two apart. A self-declaration can only raise the risk,
+   * so every explicit annotation wins over it.
    */
   function annotationForLayers(name: string): ToolMeta {
     manifestAnnotations ??= readManifestAnnotations(ctx, logger)
     const merged: ToolMeta = {}
+    const schema = ctx.tools.schemas().find((s) => s.name === name)
+    if (schema) Object.assign(merged, declaredMeta(schema))
     for (const annotation of [...manifestAnnotations, ...registries.annotations]) {
       const hit = typeof annotation.match === 'string' ? annotation.match === name : annotation.match.test(name)
       if (hit) Object.assign(merged, annotation.meta)
     }
-    const schema = ctx.tools.schemas().find((s) => s.name === name)
-    if (schema) Object.assign(merged, declaredMeta(schema))
     return merged
   }
 
@@ -405,17 +435,18 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     if (cached) return cached
     ctx.emit('tool-catalog/before-rebuild', {})
     manifestAnnotations ??= readManifestAnnotations(ctx, logger)
-    // A tool's own toolUltra declaration: after the package and runtime
-    // annotations, so it beats them, and before the panel edits, so the
-    // user's edits beat it.
+    // A tool's own toolUltra declaration: before the package and runtime
+    // annotations, so every explicit annotation beats it (a self-declaration
+    // can only raise the risk), and before the panel edits, so the user's
+    // edits beat it.
     const declared = schemas.map((s) => ({ source: 'toolUltra', match: s.name, meta: declaredMeta(s) }))
       .filter((a) => Object.keys(a.meta).length > 0)
     const catalog = buildCatalog(schemas, {
       classifiers: [...registries.classifiers],
-      // Package declarations first, runtime annotate() after, so runtime wins —
-      // then the tool's own toolUltra declaration, and panel edits last of all,
-      // so they win over everything.
-      annotations: [...manifestAnnotations, ...registries.annotations, ...declared, ...metadata.annotations()],
+      // The tool's own toolUltra declaration first, then package declarations,
+      // then runtime annotate(), so runtime wins over the package — and panel
+      // edits last of all, so they win over everything.
+      annotations: [...declared, ...manifestAnnotations, ...registries.annotations, ...metadata.annotations()],
       categories: Object.fromEntries(registries.categories),
       highRisk: settings.effective().highRisk,
     })
