@@ -680,7 +680,9 @@ for (let i = 7; i <= 11; i++) contains('control desktop: mutation refused withou
 contains('control desktop: unknown aliases are errors', dt[12].lastContent, 'Unknown host "unknown-example"')
 const seen = readFileSync(fakeDesktopLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
 check('control desktop: exactly four permitted reads with their probes reached SSH', seen.length === 8, JSON.stringify(seen.map((s) => s.argv.at(-1).slice(-120))))
-expect('control desktop: reads target both configured machines', seen.map((s) => s.argv[s.argv.indexOf('--') + 1]), ['root@desktop.example', 'root@desktop.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'root@desktop.example', 'root@desktop.example'])
+const desktopTargets = seen.map((s) => s.argv[s.argv.indexOf('--') + 1])
+const wantTargets = ['root@desktop.example', 'root@desktop.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'user@wayland.example', 'root@desktop.example', 'root@desktop.example']
+check('control desktop: reads target both configured machines in call order', JSON.stringify(desktopTargets) === JSON.stringify(wantTargets), JSON.stringify(desktopTargets))
 check('control desktop: root actions include a drop to the graphical UID', seen.filter((s) => s.argv.includes('root@desktop.example') && !s.argv.at(-1).includes('# DSH_DESKTOP_PROBE_V2')).every((s) => s.argv.at(-1).includes('--reuid') && s.argv.at(-1).includes('--init-groups')), 'root actions must not execute graphical utilities as UID 0')
 }
 
