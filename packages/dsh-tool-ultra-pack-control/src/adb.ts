@@ -237,7 +237,8 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
     },
     {
       name: 'adb_screen', pack: 'adb', risk: 'low',
-      description: 'Capture an Android adb screenshot as a local PNG; open the returned path with read_image.',
+      screenshot: true,
+      description: 'Capture an Android adb screenshot as a PNG image.',
       parameters: { device }, describe: summary('screenshot'),
       async execute(a) {
         const alias = aliasOf(a?.device)
