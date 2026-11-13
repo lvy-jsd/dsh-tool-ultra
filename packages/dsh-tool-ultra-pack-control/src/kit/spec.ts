@@ -16,7 +16,7 @@ export interface ParamSpec {
 
 export interface ToolSpec<N extends string = string> {
   name: N
-  /** Pack id this tool belongs to (`ssh`, `ssh-exec`, `adb`, `adb-root`). */
+  /** Pack id this tool belongs to (`ssh`, `ssh-exec`, `adb`, `adb-root`, `desktop`). */
   pack: string
   risk: Risk
   description: string

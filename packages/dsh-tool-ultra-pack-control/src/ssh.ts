@@ -23,6 +23,8 @@ export interface HostConfig {
   port?: number
   /** Private key file; only this key is offered. */
   identity?: string
+  /** Graphical session selection/overrides for the remote desktop pack. */
+  desktop?: import('./desktop-session.js').DesktopSessionConfig
 }
 
 export interface SshConfig {
@@ -44,6 +46,30 @@ export interface SshConfig {
 
 export interface SshOptions extends SshConfig {
   exec?: Exec
+}
+
+/** Shared SSH transport: the same alias table, connection flags and limits for all packs. */
+export function createSshTransport(options: SshOptions = {}) {
+  const exec = options.exec ?? localExec
+  const hosts = options.hosts ?? {}
+  for (const [alias, host] of Object.entries(hosts)) checkHost(alias, host)
+  const controlDir = join(tmpdir(), `dsh-control-ssh-${process.getuid?.() ?? 'u'}`)
+  const argvOptions = { sshBin: options.sshBin, multiplex: options.multiplex ?? process.platform !== 'win32', connectTimeoutS: options.connectTimeoutS, controlDir }
+  let controlReady: Promise<unknown> | undefined
+  function hostOf(alias: unknown): HostConfig {
+    const names = Object.keys(hosts)
+    if (!names.length) throw new Error('No ssh hosts are configured. Add them under hosts in the tool-ultra-pack-control config.')
+    if (typeof alias !== 'string' || !Object.hasOwn(hosts, alias)) throw new Error(`Unknown host "${String(alias)}". Configured: ${names.join(', ')}.`)
+    return hosts[alias]
+  }
+  async function remote(alias: unknown, script: string, { stdin, timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs, bytes = options.maxBytes ?? DEFAULTS.maxBytes }: { stdin?: string | Buffer, timeoutMs?: number, bytes?: number } = {}) {
+    const host = hostOf(alias)
+    if (argvOptions.multiplex) await (controlReady ??= mkdir(controlDir, { recursive: true, mode: 0o700 }).catch(() => {}))
+    const started = Date.now()
+    const result = await exec(sshArgv(host, remoteSh(script), argvOptions), { stdin, timeoutMs, maxBytes: bytes })
+    return { result, ms: Date.now() - started }
+  }
+  return { hostOf, remote }
 }
 
 const DEFAULTS = {
@@ -86,35 +112,13 @@ function describeResult(r: ExecResult, ms: number, maxChars: number, timeoutS?: 
 }
 
 export function createSshTools(options: SshOptions = {}): ToolSpec[] {
-  const exec = options.exec ?? localExec
+  const { remote } = createSshTransport(options)
   const hosts = options.hosts ?? {}
-  for (const [alias, host] of Object.entries(hosts)) checkHost(alias, host)
   const maxChars = options.maxChars ?? DEFAULTS.maxChars
-  const maxBytes = options.maxBytes ?? DEFAULTS.maxBytes
   const defaultTimeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs
   const maxTransfer = options.maxTransferBytes ?? DEFAULTS.maxTransferBytes
   const transferDir = options.transferDir ?? join(homedir(), 'dsh-transfers')
-  const controlDir = join(tmpdir(), `dsh-control-ssh-${process.getuid?.() ?? 'u'}`)
-  const argvOptions = { sshBin: options.sshBin, multiplex: options.multiplex ?? process.platform !== 'win32', connectTimeoutS: options.connectTimeoutS, controlDir }
-  let controlReady: Promise<unknown> | undefined
   const deny = [...DEFAULT_DENY_PATHS, ...(options.denyPaths ?? [])].map((p) => new RegExp(p))
-
-  function hostOf(alias: unknown): HostConfig {
-    const names = Object.keys(hosts)
-    if (!names.length) throw new Error('No ssh hosts are configured. Add them under hosts in the tool-ultra-pack-control config.')
-    const host = hosts[String(alias)]
-    if (!host) throw new Error(`Unknown host "${String(alias)}". Configured: ${names.join(', ')}.`)
-    return host
-  }
-
-  async function remote(aliasArg: unknown, script: string, { stdin, timeoutMs = defaultTimeoutMs, bytes = maxBytes }: { stdin?: string | Buffer, timeoutMs?: number, bytes?: number } = {}): Promise<{ result: ExecResult, ms: number }> {
-    const host = hostOf(aliasArg)
-    // ssh does not create the ControlPath directory; without it every call warns.
-    if (argvOptions.multiplex) await (controlReady ??= mkdir(controlDir, { recursive: true, mode: 0o700 }).catch(() => {}))
-    const started = Date.now()
-    const result = await exec(sshArgv(host, remoteSh(script), argvOptions), { stdin, timeoutMs, maxBytes: bytes })
-    return { result, ms: Date.now() - started }
-  }
 
   const checkPath = (value: unknown, label = 'path'): string => {
     const path = String(value ?? '')
