@@ -302,14 +302,17 @@ if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
     sshBin: ${fakeDesktopSsh}
     multiplex: false
     desktopCacheMs: 0
-    allow: ${profile === 'control-desktop-niri' ? "{ '*': [desktop_focus, desktop_click, desktop_type, desktop_key] }" : '{}'}
+    allow: {}
     outputDir: ${desktopOutputDir}
     auditFile: ${join(root, 'control-desktop-audit.jsonl')}
     hosts:
       example: { target: 'root@desktop.example' }
       example-wayland: { target: 'user@wayland.example' }
       example-niri: { target: 'user@niri.example' }
-`)
+${profile === 'control-desktop-niri' ? `- id: tm-testkit
+  name: dsh-tm-testkit
+  config: { approveTools: [desktop_focus, desktop_click, desktop_type, desktop_key] }
+` : ''}`)
 }
 
 // Each forwarding invocation starts a local fake CDP server in the fake SSH
@@ -326,11 +329,13 @@ appendFileSync(${JSON.stringify(fakeBrowserLog)}, JSON.stringify({ argv }) + '\\
 if (!['root@browser.example', 'user@secondary.example'].includes(target)) throw Error('Unexpected fake browser host')
 if (argv.includes('-L')) {
   const spec = argv[argv.indexOf('-L') + 1].split(':')
-  if (spec[0] !== '127.0.0.1' || spec[2] !== '127.0.0.1') throw Error('Non-loopback forward')
+  const unix = spec[0].startsWith('/')
+  if (unix ? spec[1] !== '127.0.0.1' : (spec[0] !== '127.0.0.1' || spec[2] !== '127.0.0.1')) throw Error('Non-loopback forward')
+  if (unix && !argv.includes('StreamLocalBindMask=0177')) throw Error('Non-private Unix forward')
   if (!argv.includes('ExitOnForwardFailure=yes') || !argv.includes('ControlPath=none')) throw Error('Unowned forward')
   const remotePort = target === 'root@browser.example' ? 9222 : 9333
-  if (Number(spec[3]) !== remotePort) throw Error('Wrong remote CDP port')
-  const server = await startFakeCdp({ port: Number(spec[1]), remotePort })
+  if (Number(spec[unix ? 2 : 3]) !== remotePort) throw Error('Wrong remote CDP port')
+  const server = await startFakeCdp({ ...(unix ? { socketPath: spec[0] } : { port: Number(spec[1]) }), remotePort })
   process.stdout.write(command.match(/DSH_FORWARD_[a-f0-9-]+/)[0] + '\\n')
   process.stdin.resume()
   process.stdin.on('end', async () => { await server.close() })
@@ -347,6 +352,7 @@ if (argv.includes('-L')) {
   name: '@lvy-jsd/dsh-tool-ultra-pack-control'
   config:
     packs: { ssh: false, browser: true }
+    browserAllowLocalTcp: ${process.platform === 'win32'}
     sshBin: ${fakeBrowserSsh}
     multiplex: false
     outputDir: ${browserOutputDir}
@@ -679,7 +685,7 @@ const ad = await run('control-adb', 'control-adb-main', [
 ], ['Android control'])
 expect('control adb: enabled tools start hidden', controlAdbTools(ad[0]), [])
 expect('control adb: pack:adb loads exactly observation and input tools', controlAdbTools(ad[2]), ADB_READ_INPUT)
-contains('control adb: adb_ui parses XML from the fake client', ad[3].lastContent, '[1] Button "设置 & Tools" (120,140)', '[2] ImageButton "Search \\"apps\\"" (950,150)')
+contains('control adb: adb_ui parses XML from the fake client', (() => { try { return JSON.parse(ad[3].lastContent).content } catch { return ad[3].lastContent } })(), '[1] Button "设置 & Tools" (120,140)', '[2] ImageButton "Search \\"apps\\"" (950,150)')
 expect('control adb: adb_shell loads before its call-time gate is tested', controlAdbTools(ad[4]), [...ADB_READ_INPUT, 'adb_shell'])
 contains('control adb: root shell is refused without an approval channel', ad[5].lastContent, /approval/i)
 const adbSeen = readFileSync(fakeAdbLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -737,7 +743,7 @@ contains('control browser: unknown alias fails without SSH', bt[13].lastContent,
 const seen = existsSync(fakeBrowserLog) ? readFileSync(fakeBrowserLog, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []
 check('control browser: exactly four reads reach SSH; refused mutations cannot resolve or connect', seen.length === 4 && seen.every((s) => s.argv.includes('-L')), JSON.stringify(seen))
 expect('control browser: both fake hosts are addressed', seen.map((s) => s.argv[s.argv.indexOf('--') + 1]), ['root@browser.example','root@browser.example','user@secondary.example','user@secondary.example'])
-check('control browser: every listener is loopback and has an owned SSH process', seen.every((s) => /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/.test(s.argv[s.argv.indexOf('-L') + 1]) && s.argv.includes('ControlPath=none')), JSON.stringify(seen))
+check('control browser: every listener is private Unix or loopback and has an owned SSH process', seen.every((s) => (process.platform === 'win32' ? /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/ : /^\/.*\/cdp-\d+\.sock:127\.0\.0\.1:(9222|9333)$/).test(s.argv[s.argv.indexOf('-L') + 1]) && s.argv.includes('ControlPath=none') && s.argv.includes('StreamLocalBindMask=0177')), JSON.stringify(seen))
 }
 
 // --- Remote desktop control scenarios (full tier only) -----------------------
@@ -792,7 +798,7 @@ check('control desktop: root actions include a drop to the graphical UID', seen.
 }
 
 if (include('control-desktop-niri')) {
-console.log('# control-desktop niri profile (explicitly allowlisted input)')
+console.log('# control-desktop niri profile (input approved once through the DSH approval service)')
 writeFileSync(fakeDesktopLog, '')
 const nt = await run('control-desktop-niri', 'control-desktop-niri', [
   call('tools_load', { targets: ['pack:desktop'] }),
@@ -807,7 +813,9 @@ const nt = await run('control-desktop-niri', 'control-desktop-niri', [
 contains('control niri: native focus and workspace-view geometry', nt[2].lastContent, 'Example niri window', '"focused":true', '"x":12', 'workspace-view logical pixels')
 contains('control niri: screenshot path accompanies image', nt[3].lastToolContent, `screenshot: ${desktopOutputDir}`)
 check('control niri: image reaches model request', nt[3].images?.some((i) => i.image && i.bytes > 8), JSON.stringify(nt[3].images))
-for (const [index, expected] of [[4, 'focused 42'], [5, 'clicked 12,22'], [6, 'typed'], [7, 'sent desktop key combo']]) contains('control niri: explicitly allowed input runs', nt[index].lastContent, expected)
+for (const [index, expected] of [[4, 'focused 42'], [5, 'clicked 12,22'], [6, 'typed'], [7, 'sent desktop key combo']]) contains('control niri: approved input runs', nt[index].lastContent, expected)
+const approvedEvents = readFileSync(join(root, 'control-desktop-audit.jsonl'), 'utf8').split('\n').filter(Boolean).map((s) => JSON.parse(s)).filter((r) => r.event === 'approved').map((r) => r.tool)
+check('control niri: each input was approved once through DSH approval', JSON.stringify(approvedEvents) === JSON.stringify(['desktop_focus', 'desktop_click', 'desktop_type', 'desktop_key']), JSON.stringify(approvedEvents))
 const calls = readFileSync(fakeDesktopLog, 'utf8').trim().split('\n').filter(Boolean).map((s) => JSON.parse(s))
 check('control niri: six calls plus probes all reach niri host', calls.length === 12 && calls.every((s) => s.argv.includes('user@niri.example')), JSON.stringify(calls.map((s) => s.argv.at(-1).slice(-100))))
 const actions = calls.filter((s) => !s.argv.at(-1).includes('# DSH_DESKTOP_PROBE_V2'))

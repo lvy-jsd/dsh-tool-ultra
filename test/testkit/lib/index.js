@@ -13,7 +13,9 @@
 // - when the toolCatalog service exists, a visibility filter hiding phone_fake_swipe;
 // - `testkit_deny`, which hides names from the calling agent with its own
 //   restrict({ deny }), the way MCP connector governance does;
-// - with config simulatePresetLayer, tools that exist only in a preset layer.
+// - with config simulatePresetLayer, tools that exist only in a preset layer;
+// - with config approveTools, an approval/request answerer that grants exactly
+//   those tool names once per ask (a stand-in for a user clicking Allow).
 import { appendFileSync, existsSync } from 'node:fs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { simulatePresetLayer } from './preset.js'
@@ -35,6 +37,10 @@ function fakeTool(name) {
 
 export function apply(ctx, config = {}) {
   if (config.simulatePresetLayer) simulatePresetLayer(ctx)
+  if (Array.isArray(config.approveTools)) {
+    const approve = new Set(config.approveTools)
+    ctx.on('approval/request', (req, next) => approve.has(req.toolName) ? 'allowed-once' : next())
+  }
 
   // e2e determinism (issue #45): let the harness observe and gate the catalog
   // rebuilds, so a background scan (attribution) can be asserted pre- and

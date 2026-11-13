@@ -1,12 +1,13 @@
 // Android control over configured adb targets. Scripts travel on stdin to a
 // non-PTY shell; KernelSU root uses `su -c sh`, never `adb root`.
-import { constants } from 'node:fs'
-import { lstat, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { localExec, type Exec, type ExecOptions, type ExecResult } from './kit/exec.js'
 import { DEFAULT_DENY_PATHS, capText, intArg, isDeniedPath, isReadOnlyCommand, redact, shq } from './kit/policy.js'
+import { readTransfer } from './kit/files.js'
+import { sessionKey } from './kit/scope.js'
 import type { ToolSpec } from './kit/spec.js'
 
 export const ADB_TOOL_NAMES = ['adb_devices', 'adb_info', 'adb_screen', 'adb_ui', 'adb_tap', 'adb_input', 'adb_app', 'adb_logcat'] as const
@@ -18,7 +19,7 @@ export interface AdbConfig {
   adbBin?: string
   /** Reconnect configured wireless targets before use. Default true; pairing is manual. */
   adbConnect?: boolean
-  /** Ask before taps, input and app start/stop. Default false. */
+  /** Ask before taps, input and app start/stop. Default true. */
   adbAskInput?: boolean
   /** Numbered UI snapshots expire after this time. Default 30000 ms. */
   adbUiTtlMs?: number
@@ -121,10 +122,11 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
   const transferDir = options.transferDir ?? join(homedir(), 'dsh-transfers')
   const outputDir = options.outputDir ?? join(transferDir, 'screens')
   const deny = [...DEFAULT_DENY_PATHS, ...(options.denyPaths ?? [])].map((p) => new RegExp(p))
-  const snapshots = new Map<string, { at: number, elements: UiElement[] }>()
+  const snapshots = new Map<string, { at: number, elements: UiElement[], revision: number }>()
   const revisions = new Map<string, number>()
+  const dumps = new Map<string, string>()
   function invalidate(alias: string): number {
-    snapshots.delete(alias)
+    snapshots.delete(sessionKey(alias))
     const revision = (revisions.get(alias) ?? 0) + 1
     revisions.set(alias, revision)
     return revision
@@ -172,31 +174,9 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
   async function localBytes(value: unknown): Promise<{ name: string, bytes: Buffer }> {
     const name = fileName(value)
     const path = join(transferDir, name)
-    // lstat also refuses links on platforms without O_NOFOLLOW (Windows).
-    // Keep O_NOFOLLOW where available to reject a link substituted during open.
-    const before = await lstat(path)
-    if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${name} must be a regular file; symlinks are not allowed.`)
-    const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
-    try {
-      const st = await file.stat()
-      if (!st.isFile()) throw new Error(`${name} must be a regular file.`)
-      // Compare the opened file with both path checks before reading any data.
-      // This detects replacement during open when no atomic no-follow flag exists.
-      const after = await lstat(path)
-      if (!after.isFile() || after.isSymbolicLink() || before.dev !== st.dev || before.ino !== st.ino || after.dev !== st.dev || after.ino !== st.ino) throw new Error(`${name} changed while opening; symlinks are not allowed.`)
-      if (st.size > maxTransfer) throw new Error(`${name} is larger than ${maxTransfer} bytes.`)
-      // Read through the held descriptor, bounded even if the source grows.
-      const bytes = Buffer.alloc(Math.min(st.size + 1, maxTransfer + 1))
-      let length = 0
-      while (length < bytes.length) {
-        const { bytesRead } = await file.read(bytes, length, bytes.length - length, null)
-        if (!bytesRead) break
-        length += bytesRead
-      }
-      if (length > maxTransfer || length > st.size) throw new Error(`${name} grew while reading; retry.`)
-      return { name, bytes: bytes.subarray(0, length) }
-    } finally { await file.close() }
+    return { name, bytes: await readTransfer(path, name, maxTransfer) }
   }
+
   async function staged(value: unknown, action: (path: string, size: number) => Promise<string>, apk = false): Promise<string> {
     const { name, bytes } = await localBytes(value)
     if (apk && !name.toLowerCase().endsWith('.apk')) throw new Error('Give an .apk file name.')
@@ -219,7 +199,7 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
   function checkBinary(r: ExecResult): void {
     if (r.truncated || r.stdoutBytes.length > maxTransfer) throw new Error(`Binary output exceeded ${maxTransfer} bytes or was truncated; nothing saved.`)
   }
-  const askInput = (a: { device?: unknown }) => options.adbAskInput ? `${a?.device}: Android input or app change` : undefined
+  const askInput = (a: unknown) => options.adbAskInput !== false ? `Android input or app change: ${JSON.stringify(a)}` : undefined
   const summary = (action: string) => (a: { device?: unknown }) => `${a?.device}: ${action}`
   const coordinate = (s: string) => {
     if (!/^\d{1,6},\d{1,6}$/.test(s)) throw new Error('Give coordinates as x,y.')
@@ -272,7 +252,11 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
       parameters: { device }, describe: summary('UI snapshot'),
       async execute(a) {
         const alias = aliasOf(a?.device)
-        const revision = invalidate(alias)
+        const revision = revisions.get(alias) ?? 0
+        const dump = randomUUID()
+        const key = sessionKey(alias)
+        snapshots.delete(key)
+        dumps.set(key, dump)
         // A unique shell-owned file avoids collisions across calls; trap removes
         // it on both success and error. /dev/tty dumps mix status text with XML.
         const path = `/data/local/tmp/dsh-ui-${randomUUID()}.xml`
@@ -282,9 +266,9 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
         const elements = parseUiDump(r.stdout)
         const text = elements.map((e) => `[${e.n}] ${e.className.split('.').pop()} ${JSON.stringify(e.text || e.description)} (${e.x},${e.y})`).join('\n')
         if (text.length > maxChars) throw new Error('UI snapshot exceeds maxChars; increase it before tapping by reference.')
-        if (revisions.get(alias) !== revision) throw new Error('UI changed during the dump; run adb_ui again.')
-        snapshots.set(alias, { at: Date.now(), elements })
-        return redact(text) || 'No visible UI elements.'
+        if ((revisions.get(alias) ?? 0) !== revision || dumps.get(key) !== dump) throw new Error('UI changed during the dump; run adb_ui again.')
+        snapshots.set(key, { at: Date.now(), elements, revision })
+        return JSON.stringify({ trust: 'untrusted_android_content', content: redact(text) || 'No visible UI elements.' })
       },
     },
     {
@@ -297,8 +281,8 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
         let point: number[]
         if (target.includes(',') && !target.startsWith('text:')) point = coordinate(target)
         else {
-          const snapshot = snapshots.get(alias)
-          if (!snapshot || Date.now() - snapshot.at > (options.adbUiTtlMs ?? 30_000)) throw new Error('Run adb_ui for this device first; its snapshot is missing or expired.')
+          const snapshot = snapshots.get(sessionKey(alias))
+          if (!snapshot || snapshot.revision !== (revisions.get(alias) ?? 0) || Date.now() - snapshot.at > (options.adbUiTtlMs ?? 30_000)) throw new Error('Run adb_ui for this device first; its snapshot is missing or expired.')
           const matches = target.startsWith('text:') ? snapshot.elements.filter((e) => e.text === target.slice(5) || e.description === target.slice(5)) : snapshot.elements.filter((e) => /^\d+$/.test(target) && e.n === Number(target))
           if (matches.length !== 1) throw new Error('Tap target missing or ambiguous; refresh adb_ui or use coordinates.')
           point = [matches[0].x, matches[0].y]
@@ -336,7 +320,7 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
       name: 'adb_app', pack: 'adb', risk: 'medium',
       description: 'Android apps over adb: current foreground, list packages, start launcher activity, or force-stop a package.',
       parameters: { device, action: { type: 'string', required: true, enum: ['current', 'list', 'start', 'stop'] }, pkg: { type: 'string', description: 'Android package id for start/stop.' } },
-      approve: (a) => ['current', 'list'].includes(a?.action) ? undefined : askInput(a), describe: summary('app operation'),
+      approve: (a) => ['current', 'list'].includes(a?.action) ? undefined : askInput(a), describe: (a) => `${a?.device}: app ${a?.action} ${a?.pkg ?? ''}`,
       async execute(a) {
         const alias = aliasOf(a?.device)
         let cmd: string
@@ -367,8 +351,9 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
       name: 'adb_shell', pack: 'adb-root', risk: 'high',
       description: 'Run Android shell commands via adb; root uses KernelSU su. Root always asks; non-root read-only commands may skip.',
       parameters: { device, cmd: { type: 'string', required: true }, root: rootParam, timeout_s: { type: 'integer', description: '1-600 seconds; default 60.' } },
-      approve: (a) => a?.root === false || a?.root === undefined ? (isReadOnlyCommand(String(a?.cmd ?? ''), deny) ? undefined : `${a?.device}: ${capText(redact(String(a?.cmd ?? '')), 300)}`) : `${a?.device}: KernelSU root shell`,
-      describe: (a) => `${a?.device}: ${a?.root ? 'root ' : ''}shell ${capText(redact(String(a?.cmd ?? '')).replace(/[\r\n]/g, ' '), 200)}`,
+      alwaysAsk: (a) => a?.root !== false && a?.root !== undefined,
+      approve: (a) => (a?.root === false || a?.root === undefined) && isReadOnlyCommand(String(a?.cmd ?? ''), deny) ? undefined : `${a?.device}: ${a?.root ? 'KernelSU root shell: ' : ''}${String(a?.cmd ?? '')}`,
+      describe: (a) => `${a?.device}: ${a?.root ? 'root ' : ''}shell (command omitted)`,
       async execute(a) {
         const alias = aliasOf(a?.device)
         const root = rootOf(a?.root)
@@ -378,10 +363,10 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
       },
     },
     {
-      name: 'adb_push', pack: 'adb-root', risk: 'high',
+      name: 'adb_push', pack: 'adb-root', risk: 'high', alwaysAsk: true,
       description: 'Upload a regular file from transferDir using adb push (shell permissions); always asks. Local is a plain file name.',
       parameters: { device, local: { type: 'string', required: true }, remote: { type: 'string', required: true, description: 'Absolute Android destination path.' } },
-      approve: (a) => `${a?.device}: push ${redact(String(a?.local))} to ${redact(String(a?.remote))}`, describe: summary('push file'),
+      approve: (a) => `${a?.device}: push ${String(a?.local)} to ${String(a?.remote)}`, describe: (a) => `${a?.device}: push ${a?.local} to ${a?.remote}`,
       async execute(a) {
         const alias = aliasOf(a?.device)
         const remote = remotePath(a?.remote)
@@ -397,7 +382,8 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
       name: 'adb_pull', pack: 'adb-root', risk: 'high',
       description: 'Download one Android file into transferDir, never overwrite. Optional KernelSU root always asks first.',
       parameters: { device, remote: { type: 'string', required: true }, local: { type: 'string', required: true, description: 'New plain file name in transferDir.' }, root: rootParam },
-      approve: (a) => a?.root === false || a?.root === undefined ? undefined : `${a?.device}: KernelSU root pull ${redact(String(a?.remote))}`, describe: summary('pull file'),
+      alwaysAsk: (a) => a?.root !== false && a?.root !== undefined,
+      approve: (a) => a?.root === false || a?.root === undefined ? undefined : `${a?.device}: KernelSU root pull ${String(a?.remote)} as ${String(a?.local)}`, describe: (a) => `${a?.device}: pull ${a?.remote} as ${a?.local}`,
       async execute(a) {
         const alias = aliasOf(a?.device)
         const remote = remotePath(a?.remote)
@@ -409,10 +395,10 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
       },
     },
     {
-      name: 'adb_install', pack: 'adb-root', risk: 'high',
+      name: 'adb_install', pack: 'adb-root', risk: 'high', alwaysAsk: true,
       description: 'Install one APK from transferDir over adb, without replacement or downgrade flags; always asks.',
       parameters: { device, apk: { type: 'string', required: true, description: 'Plain .apk file name in transferDir.' } },
-      approve: (a) => `${a?.device}: install ${redact(String(a?.apk))}`, describe: summary('install APK'),
+      approve: (a) => `${a?.device}: install ${String(a?.apk)}`, describe: (a) => `${a?.device}: install ${a?.apk}`,
       async execute(a) {
         const alias = aliasOf(a?.device)
         invalidate(alias)

@@ -101,19 +101,19 @@ test('desktop: config/probe validation and failures stop before any action', asy
   }
 })
 
-test('desktop: all mutations ask per call; reads and explicitly allowed sessions proceed', async () => {
+test('desktop: all mutations always ask even in allowed sessions; reads proceed', async () => {
   const all = Object.values(tools())
   const decide = gate(all)
   for (const t of all) {
     const decision = decide({ name: t.name, arguments: args(), agent: { id: 'example-session' } })
     assert.equal(decision?.kind, t.risk === 'low' ? undefined : 'ask', t.name)
   }
-  assert.equal(gate(all, { 'example-session': ['desktop_key'] })({ name: 'desktop_key', arguments: args({ combo: 'Return' }), agent: { id: 'example-session' } }), undefined)
-  assert.equal(gate(all, { '*': true })({ name: 'desktop_type', arguments: args({ text: 'example' }) }), undefined)
+  assert.equal(gate(all, { 'example-session': ['desktop_key'] })({ name: 'desktop_key', arguments: args({ combo: 'Return' }), agent: { id: 'example-session' } }).kind, 'ask')
+  assert.equal(gate(all, { '*': true })({ name: 'desktop_type', arguments: args({ text: 'example' }) }).kind, 'ask')
   const secret = 'example-body $(id); password=example-secret'
   for (const name of ['desktop_type', 'desktop_clipboard_set']) {
     assert.ok(!tools()[name].describe(args({ text: secret })).includes(secret))
-    assert.ok(!tools()[name].approve(args({ text: secret })).includes(secret))
+    assert.ok(tools()[name].approve(args({ text: secret })).includes(secret))
   }
 })
 
@@ -346,7 +346,7 @@ test('desktop: DSH adapter advertises all hosts and refuses mutations before eve
   const key = registered.find((t) => t.name === 'desktop_key')
   const value = args({ combo: 'Return' })
   const decision = await hooks['tools/pre-execute']({ name: key.name, arguments: value }, () => key.execute(value))
-  assert.equal(decision.kind, 'ask')
+  assert.equal(decision.kind, 'deny')
   assert.equal(f.calls.length, 0)
   assert.equal(key.isConcurrencySafe(), false)
 })

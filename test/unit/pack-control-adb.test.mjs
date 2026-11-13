@@ -131,7 +131,8 @@ test('adb: UI references are device-specific, expire, reject ambiguity and are i
   let now = 1000
   ctx.mock.method(Date, 'now', () => now)
   const out = await t.adb_ui.execute(deviceArgs())
-  assert.match(out, /^\[1\] Button "设置 & Tools" \(120,140\)/)
+  assert.equal(JSON.parse(out).trust, 'untrusted_android_content')
+  assert.match(JSON.parse(out).content, /^\[1\] Button "设置 & Tools" \(120,140\)/)
   assert.match(commands(f)[0].options.stdin, /trap .*rm -f .* EXIT; uiautomator dump --compressed/)
   await assert.rejects(t.adb_tap.execute({ device: 'secondary', target: '1' }), /snapshot/)
   await assert.rejects(t.adb_tap.execute(deviceArgs({ target: 'text:Duplicate' })), /ambiguous/)
@@ -214,7 +215,7 @@ test('adb: shell commands use stdin, root is KernelSU su -c sh, and time/output 
   for (const cmd of ['', '\0', '  ']) await assert.rejects(t.adb_shell.execute(deviceArgs({ cmd })), /Give a shell command/)
 })
 
-test('adb: root calls always ask, conservative non-root reads skip, and allow can waive approval per session', () => {
+test('adb: root calls always ask despite allow, conservative non-root reads skip, and input asks by default', () => {
   const specs = Object.values(tools())
   const decide = gate(specs)
   const call = (name, args = {}) => decide({ name, arguments: deviceArgs(args), agent: { id: 'example-session' } })
@@ -224,12 +225,13 @@ test('adb: root calls always ask, conservative non-root reads skip, and allow ca
   for (const cmd of ['ls; id', 'ls $(id)', 'ls > /example', 'reboot', 'cat /proc/1/environ']) assert.equal(call('adb_shell', { cmd }).kind, 'ask')
   assert.equal(call('adb_pull', { root: true }).kind, 'ask')
   assert.equal(call('adb_pull'), undefined)
-  assert.equal(call('adb_input'), undefined)
+  assert.equal(call('adb_input').kind, 'ask')
+  assert.equal(gate(Object.values(tools({ adbAskInput: false })))({ name: 'adb_input', arguments: deviceArgs() }), undefined)
   const ask = gate(Object.values(tools({ adbAskInput: true })))
   for (const name of ['adb_tap', 'adb_input']) assert.equal(ask({ name, arguments: deviceArgs() }).kind, 'ask')
   assert.equal(ask({ name: 'adb_app', arguments: deviceArgs({ action: 'start' }) }).kind, 'ask')
   assert.equal(ask({ name: 'adb_app', arguments: deviceArgs({ action: 'current' }) }), undefined)
-  assert.equal(gate(specs, { 'example-session': ['adb_shell'] })({ name: 'adb_shell', arguments: deviceArgs({ root: true, cmd: 'id' }), agent: { id: 'example-session' } }), undefined)
+  assert.equal(gate(specs, { 'example-session': ['adb_shell'] })({ name: 'adb_shell', arguments: deviceArgs({ root: true, cmd: 'id' }), agent: { id: 'example-session' } }).kind, 'ask')
 })
 
 test('adb: binary screenshots save private unique PNG files and reject partial/error output', async (ctx) => {
@@ -359,7 +361,7 @@ test('adb: DSH adapter registers packs and blocks execution when call approval i
   const spec = h.registered.find((t) => t.name === 'adb_shell')
   const args = deviceArgs({ cmd: 'id', root: true })
   const decision = await h.hooks['tools/pre-execute']({ name: 'adb_shell', arguments: args }, () => spec.execute(args))
-  assert.equal(decision.kind, 'ask')
+  assert.equal(decision.kind, 'deny')
   assert.equal(f.calls.length, 0, 'gate returns ask before the runner is invoked')
   assert.equal(spec.isConcurrencySafe(), false)
   assert.equal(h.registered.find((t) => t.name === 'adb_ui').isConcurrencySafe(), false)
