@@ -284,18 +284,22 @@ export function resolveTarget(catalog: Catalog, raw: unknown, resolvers: readonl
   return { kind: 'tool', tool: entry }
 }
 
-/** Code-point Levenshtein distance (case-sensitive; callers lowercase first). */
+/** Code-point optimal string alignment distance (an adjacent transposition counts as one; case-sensitive; callers lowercase first). */
 function editDistance(a: string, b: string): number {
   const x = [...a]
   const y = [...b]
   if (!x.length) return y.length
   if (!y.length) return x.length
+  let prev2: number[] = []
   let prev = Array.from({ length: y.length + 1 }, (_, i) => i)
   for (let i = 1; i <= x.length; i += 1) {
     const cur = [i]
     for (let j = 1; j <= y.length; j += 1) {
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1))
+      let cost = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1))
+      if (i > 1 && j > 1 && x[i - 1] === y[j - 2] && x[i - 2] === y[j - 1]) cost = Math.min(cost, prev2[j - 2] + 1)
+      cur[j] = cost
     }
+    prev2 = prev
     prev = cur
   }
   return prev[y.length]
@@ -310,8 +314,9 @@ export interface NamedCatalog {
 
 /**
  * The closest catalog names to a target that resolved to nothing, for a
- * "did you mean" hint. Case-insensitive edit distance over code points (so
- * Chinese names match too); a name that extends the target counts as one edit.
+ * "did you mean" hint. Case-insensitive optimal string alignment distance over
+ * code points (an adjacent transposition counts as one, so Chinese names match
+ * too); a name that extends the target counts as one edit.
  * Only names within a length-relative threshold are returned, so an unrelated
  * query gets no hint at all. At most `limit` names, closest first.
  */
@@ -321,7 +326,7 @@ export function closestNames(catalog: NamedCatalog, target: string, limit = 3): 
   const candidates = new Set<string>()
   for (const name of [...(catalog.categories?.keys() ?? []), ...(catalog.groups?.keys() ?? []), ...catalog.tools.keys()]) candidates.add(name)
   for (const tool of catalog.tools.values()) candidates.add(tool.short)
-  const threshold = Math.min(3, Math.max(1, Math.floor(needle.length / 4)))
+  const threshold = Math.min(3, Math.max(1, Math.floor(needle.length / 3)))
   const scored = [...candidates].map((name) => {
     const hay = name.toLowerCase()
     const distance = hay.startsWith(needle) && needle.length >= 2 ? 1 : editDistance(needle, hay)
