@@ -49,6 +49,35 @@ dsh plugin --profile web add @lvy-jsd/dsh-tool-ultra-panel
 
 `tools_load(["web"])` 也接受裸名：按已注册的 `pack:` → `cap:` → `device:` 命名空间依次尝试，只取第一个非空匹配，未命中则按原目录逻辑查找；显式前缀的行为与插件归属不变。
 
+## 经典模式与 Bot 模式
+
+Tool Ultra 可以在任何 DSH profile 里工作。两种常见配置：
+
+### 经典模式（DSH web profile）
+
+普通的 DSH 网页界面，例如 `web` profile。推荐安装：核心包、基于规则的分类器（可选，但推荐）和面板：
+
+```sh
+dsh plugin --profile web add @lvy-jsd/dsh-tool-ultra-core @lvy-jsd/dsh-tool-ultra-classifier-rules @lvy-jsd/dsh-tool-ultra-panel
+```
+
+重启 DSH，然后打开 **设置**：设置侧栏会出现 **工具管理** 一节。
+
+### Bot 模式（装了 ds-bot 的 profile）
+
+网页界面运行在 [ds-bot](https://www.npmjs.com/package/ds-bot) 布局下的 profile（例如名为 `space-bot` 的 profile）。把同样的包装进那个 profile：
+
+```sh
+dsh plugin --profile <bot-profile> add @lvy-jsd/dsh-tool-ultra-core @lvy-jsd/dsh-tool-ultra-classifier-rules @lvy-jsd/dsh-tool-ultra-panel
+```
+
+面板是同一个，但入口多一步：ds-bot 隐藏了 DSH 的设置按钮，所以面板一节要通过 **Bot 设置 → Harness 设置 → 工具管理** 打开。
+
+**已知限制。**
+
+- `@lvy-jsd/dsh-tool-manager-dsbot-entry` 已弃用，不再发版。它以前在 ds-bot 的设置弹窗里加一行"工具管理"，点开就在弹窗内显示面板；没有它时，用上面的设置路径。
+- ds-bot 的设置弹窗页面列表是固定的，没有扩展点，所以从外面加进去的行（dsbot-entry 的做法）在 ds-bot 改弹窗结构后会消失。
+
 ## 包
 
 | 包 | 作用 |

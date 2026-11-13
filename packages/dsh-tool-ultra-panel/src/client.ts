@@ -10,6 +10,12 @@
 // Copy is registered with the host locale service in English and Chinese and
 // switches with the DSH interface language. Category names are translated;
 // group and tool names are identifiers and stay as they are.
+//
+// The script also registers the ds-bot entry helpers (findDsbotSettingsDialog,
+// DSBOT_THEME, dsbotThemeCss) under '@lvy-jsd/dsh-tool-ultra-panel/dsbot':
+// dsh-tool-manager-dsbot-entry requires that id, and the host only injects
+// this package's ./client bundle, so the helpers live in this same script
+// rather than in a separate module file.
 
 // The host surface this file touches, described by use: the host's own types
 // for these are merge-extensible maps that other packages augment, which a
@@ -30,6 +36,60 @@ interface ClientContext {
   get(name: string): unknown
   effect(fn: () => void | (() => void), label?: string): void
 }
+
+/** The ds-bot settings dialog and the parts the entry needs, or null when the DOM is not as expected. */
+interface DsbotDialog {
+  dialog: Element
+  nav: Element
+  main: Element
+}
+
+/**
+ * Find the ds-bot settings dialog and its nav/main, or null when the DOM is not
+ * as expected. `root` is the document (or any element with querySelector); the
+ * check is pure, so it can be tested with a stub.
+ */
+function findDsbotSettingsDialog(root: { querySelector(selector: string): Element | null }): DsbotDialog | null {
+  const dialog = root.querySelector('.bt-settings[role=dialog]')
+  const nav = dialog?.querySelector(':scope > nav.bt-settings-nav')
+  const main = dialog?.querySelector(':scope > .bt-settings-main')
+  return dialog && nav && main ? { dialog, nav, main } : null
+}
+
+/**
+ * The panel's theme variables mapped onto ds-bot's variables, so the panel
+ * takes ds-bot's colors inside its dialog. Each entry is the panel variable
+ * and the ds-bot value (a var() reference, with a fallback where ds-bot has no
+ * guaranteed value) it maps to.
+ */
+const DSBOT_THEME: Record<string, string> = {
+  '--dsw-alias-label-primary': 'var(--bt-ink)',
+  '--dsw-alias-label-secondary': 'var(--bt-ink-2)',
+  '--dsw-alias-label-tertiary': 'var(--bt-ink-3)',
+  '--dsw-alias-border-l2': 'var(--bt-line-2)',
+  '--dsw-alias-bg-layer-1': 'var(--bt-card)',
+  '--dsw-alias-bg-layer-2': 'var(--bt-hover)',
+  '--dsw-alias-interactive-bg-hover': 'var(--bt-hover)',
+  '--dsw-alias-state-business-primary': 'var(--bt-accent)',
+  '--dsw-alias-state-success-primary': 'var(--bt-green,#00c972)',
+  '--dsw-alias-state-warn-primary': 'var(--bt-star,#ff9800)',
+  '--dsw-alias-state-warn-label': 'var(--bt-star,#ff9800)',
+  '--dsw-radius-md': '10px',
+  '--dsw-radius-sm': '8px',
+}
+
+/** The theme mapping as CSS declarations, ready to drop into a style rule. */
+function dsbotThemeCss(): string {
+  return Object.entries(DSBOT_THEME).map(([name, value]) => `${name}:${value}`).join(';')
+}
+
+// The ds-bot entry (dsh-tool-manager-dsbot-entry) requires these helpers under
+// their own module id. The host only injects this package's ./client bundle,
+// so the registration lives in this same script.
+;(window as unknown as { __ModuleLoader__: ModuleLoader }).__ModuleLoader__.load({
+  id: '@lvy-jsd/dsh-tool-ultra-panel/dsbot',
+  factory: () => ({ findDsbotSettingsDialog, DSBOT_THEME, dsbotThemeCss }),
+})
 
 ;(window as unknown as { __ModuleLoader__: ModuleLoader }).__ModuleLoader__.load({
   id: '@lvy-jsd/dsh-tool-ultra-panel',
