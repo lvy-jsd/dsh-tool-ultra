@@ -252,7 +252,7 @@ if (JSON.stringify(argv) === JSON.stringify(['connect', 'phone.example:5555'])) 
 const fakeDesktopSsh = join(root, 'fake-desktop-ssh.mjs')
 const fakeDesktopLog = join(root, 'fake-desktop-ssh.jsonl')
 const desktopOutputDir = join(root, 'desktop-screens')
-const desktopPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGoAAAAASUVORK5CYII=', 'base64')
+const desktopPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAbElEQVR4nA3JQQEAMAgDMZSgpEqqhOepQAlKqmjLN1VFFypcTLHFFSmqmm7UuJlmm2vSP0QLCYsRK05EP0wbGZsxa87EP4YeNHiYYYcbMj+WXrR4mWWXW7I/jj50+JhjjztyP0IHBYcJGy4kPLAsVIExyOP/AAAAAElFTkSuQmCC', 'base64') // valid 8x8 sRGB PNG: DSH attachments decode it fully
 if (needProfile('control-desktop') || needProfile('control-desktop-niri')) {
   writeFileSync(fakeDesktopSsh, `#!${process.execPath}
 import { appendFileSync, readFileSync } from 'node:fs'

@@ -145,7 +145,7 @@ test('desktop: binary screenshots are private unique local PNGs and partial/erro
 
 test('desktop: defineTool model output contains an attachment image, with explicit path fallbacks', async (ctx) => {
   const dir = await folder(ctx)
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGoAAAAASUVORK5CYII=', 'base64')
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAbElEQVR4nA3JQQEAMAgDMZSgpEqqhOepQAlKqmjLN1VFFypcTLHFFSmqmm7UuJlmm2vSP0QLCYsRK05EP0wbGZsxa87EP4YeNHiYYYcbMj+WXrR4mWWXW7I/jj50+JhjjztyP0IHBYcJGy4kPLAsVIExyOP/AAAAAElFTkSuQmCC', 'base64')
   const ref = { attachmentId: 'a'.repeat(64), mediaType: 'image/png', bytes: png.length, width: 1, height: 1, originalDimensions: { width: 2, height: 2 } }
   const saved = [], registered = []
   let store = { async saveImage(input) { saved.push(input); return ref } }

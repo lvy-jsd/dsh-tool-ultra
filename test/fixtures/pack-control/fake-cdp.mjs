@@ -2,7 +2,7 @@
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { createContext, runInContext } from 'node:vm'
-export const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGoAAAAASUVORK5CYII=', 'base64')
+export const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAbElEQVR4nA3JQQEAMAgDMZSgpEqqhOepQAlKqmjLN1VFFypcTLHFFSmqmm7UuJlmm2vSP0QLCYsRK05EP0wbGZsxa87EP4YeNHiYYYcbMj+WXrR4mWWXW7I/jj50+JhjjztyP0IHBYcJGy4kPLAsVIExyOP/AAAAAElFTkSuQmCC', 'base64')
 function frame(text, opcode = 1) {
   const data = Buffer.from(text)
   const head = Buffer.alloc(data.length < 126 ? 2 : data.length <= 65535 ? 4 : 10)
