@@ -10,6 +10,7 @@ import type { ExecResult } from './kit/exec.js'
 import type { ToolSpec } from './kit/spec.js'
 import { checkDesktopSession, desktopProbeScript, selectDesktopSession, type DesktopBackend } from './desktop-session.js'
 import { ydotoolKeys, ydotoolSocket } from './desktop-input.js'
+import { COMMON_DEFAULTS, configInteger, configText } from './kit/config.js'
 
 export * from './desktop-session.js'
 export const DESKTOP_TOOL_NAMES = ['desktop_screen', 'desktop_windows', 'desktop_focus', 'desktop_click', 'desktop_type', 'desktop_key', 'desktop_clipboard_get', 'desktop_clipboard_set'] as const
@@ -115,11 +116,11 @@ export function desktopWindows(backend: DesktopBackend['kind'], raw: string): st
 export function createDesktopTools(options: DesktopOptions = {}): ToolSpec[] {
   const { remote, hostOf } = createSshTransport(options)
   for (const host of Object.values(options.hosts ?? {})) checkDesktopSession(host.desktop)
-  const maxChars = options.maxChars ?? 20_000
-  const maxTransfer = options.maxTransferBytes ?? 50_000_000
+  const maxChars = options.maxChars ?? COMMON_DEFAULTS.maxChars
+  const maxTransfer = options.maxTransferBytes ?? COMMON_DEFAULTS.maxTransferBytes
   const outputDir = options.outputDir ?? join(options.transferDir ?? join(homedir(), 'dsh-transfers'), 'screens')
-  const cacheMs = options.desktopCacheMs ?? 3000
-  if (!Number.isInteger(cacheMs) || cacheMs < 0 || cacheMs > 30_000) throw new Error('desktopCacheMs must be an integer from 0 to 30000.')
+  configText(options.outputDir, 'desktop.outputDir')
+  const cacheMs = configInteger(options.desktopCacheMs, 3000, 0, 30_000, 'desktop.desktopCacheMs')
   const cache = new Map<string, { backend: DesktopBackend, expires: number }>()
   const discoveredAt = new WeakMap<DesktopBackend, number>()
 

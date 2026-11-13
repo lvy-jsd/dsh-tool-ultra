@@ -5,11 +5,12 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isIP } from 'node:net'
 import { Cdp, type CdpValue } from './browser-cdp.js'
-import { createSshTransport, type SshOptions } from './ssh.js'
+import { checkHost, createSshTransport, type SshOptions } from './ssh.js'
 import { desktopCombo } from './desktop.js'
 import { redact, shq } from './kit/policy.js'
 import { sessionKey } from './kit/scope.js'
 import type { ToolSpec } from './kit/spec.js'
+import { configBoolean, configInteger, configKeys, configObject, configText } from './kit/config.js'
 
 export const BROWSER_TOOL_NAMES = ['browser_tabs', 'browser_page', 'browser_shot', 'browser_open', 'browser_click', 'browser_type', 'browser_key', 'browser_eval'] as const
 export interface BrowserConfig {
@@ -26,11 +27,6 @@ const refParam = { type: 'string', required: true, description: 'Exact numbered 
 function textArg(v: unknown, label: string, max: number, empty = false): string {
   if (typeof v !== 'string' || (!empty && !v.length) || v.includes('\0') || Buffer.byteLength(v) > max) throw new Error(`Give ${label} as text without NUL, at most ${max} bytes.`)
   return v
-}
-function configNumber(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
-  const n = value ?? fallback
-  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${name} must be an integer from ${min} to ${max}.`)
-  return n
 }
 /** Conservative global-unicast check, including canonical hex IPv4-mapped IPv6. */
 export function browserPrivateAddress(ip: string): boolean {
@@ -70,17 +66,24 @@ function untrusted(value: unknown, limit: number): string {
 }
 
 export function createBrowserTools(options: BrowserOptions = {}): ToolSpec[] {
-  const transport = createSshTransport({ ...options, allowLocalTcp: options.browserAllowLocalTcp })
-  if (options.browserAllowPrivate !== undefined && typeof options.browserAllowPrivate !== 'boolean') throw new Error('browserAllowPrivate must be boolean.')
-  if (options.browserAllowLocalTcp !== undefined && typeof options.browserAllowLocalTcp !== 'boolean') throw new Error('browserAllowLocalTcp must be boolean.')
-  for (const h of Object.values(options.hosts ?? {})) {
-    const p = h.browser?.port
-    if (p !== undefined && (!Number.isInteger(p) || p < 1 || p > 65535)) throw new Error('hosts.<alias>.browser.port must be an integer from 1 to 65535.')
+  configObject(options, 'browser')
+  if (options.hosts !== undefined) configObject(options.hosts, 'hosts')
+  configBoolean(options.browserAllowPrivate, 'browser.browserAllowPrivate')
+  configBoolean(options.browserAllowLocalTcp, 'browser.browserAllowLocalTcp')
+  configText(options.outputDir, 'browser.outputDir')
+  for (const [alias, h] of Object.entries(options.hosts ?? {})) {
+    checkHost(alias, h)
+    if (h.browser !== undefined) {
+      configObject(h.browser, `hosts.${alias}.browser`)
+      configKeys(h.browser, ['port'], `hosts.${alias}.browser`)
+    }
+    configInteger(h.browser?.port, 9222, 1, 65535, `hosts.${alias}.browser.port`)
   }
-  const limit = configNumber(options.maxChars, 20_000, 128, 200_000, 'browser maxChars')
-  const timeout = configNumber(options.timeoutMs, 30_000, 100, 120_000, 'browser timeoutMs')
-  const maxBytes = configNumber(options.maxBytes, 16_000_000, 1024, 64_000_000, 'browser maxBytes')
-  const maxTransfer = configNumber(options.maxTransferBytes, 10_000_000, 1, 40_000_000, 'browser maxTransferBytes')
+  const limit = configInteger(options.maxChars, 20_000, 128, 200_000, 'browser.maxChars')
+  const timeout = configInteger(options.timeoutMs, 30_000, 100, 120_000, 'browser.timeoutMs')
+  const maxBytes = configInteger(options.maxBytes, 16_000_000, 1024, 64_000_000, 'browser.maxBytes')
+  const maxTransfer = configInteger(options.maxTransferBytes, 10_000_000, 1, 40_000_000, 'browser.maxTransferBytes')
+  const transport = createSshTransport({ ...options, timeoutMs: timeout, allowLocalTcp: options.browserAllowLocalTcp })
   const dir = options.outputDir ?? join(options.transferDir ?? join(homedir(), 'dsh-transfers'), 'browser')
   const worldName = `dsh-browser-${randomUUID()}`
   const states = new Map<string, { tab?: string, refs?: { tab: string, generation: string, frameId: string, loaderId: string, backendNodeIds: number[], labels: unknown[] } }>()

@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { localExec, type Exec, type ExecResult } from './kit/exec.js'
 import { DEFAULT_DENY_PATHS, capText, intArg, isDeniedPath, isReadOnlyCommand, redact, shq } from './kit/policy.js'
 import { readTransfer } from './kit/files.js'
+import { COMMON_DEFAULTS, checkCommonConfig, configBoolean, configInteger, configKeys, configObject, configText, type CommonConfig } from './kit/config.js'
 import type { ToolSpec } from './kit/spec.js'
 
 export const SSH_TOOL_NAMES = ['ssh_hosts', 'ssh_sys', 'ssh_read', 'ssh_log'] as const
@@ -34,21 +35,13 @@ export interface HostConfig {
   browser?: { port?: number }
 }
 
-export interface SshConfig {
+export interface SshConfig extends CommonConfig {
   hosts?: Record<string, HostConfig>
   /** The ssh client to run (default `ssh`). */
   sshBin?: string
   /** Reuse one connection per host for a minute (default true, off on Windows). */
   multiplex?: boolean
   connectTimeoutS?: number
-  timeoutMs?: number
-  maxBytes?: number
-  maxChars?: number
-  /** Where ssh_get saves and ssh_put reads: only file names, never paths, come from the model. */
-  transferDir?: string
-  maxTransferBytes?: number
-  /** Extra remote path patterns (regular expressions) the read tools refuse. */
-  denyPaths?: string[]
 }
 
 export interface SshOptions extends SshConfig {
@@ -59,6 +52,11 @@ export interface SshOptions extends SshConfig {
 
 /** Shared SSH transport: the same alias table, connection flags and limits for all packs. */
 export function createSshTransport(options: SshOptions = {}) {
+  checkCommonConfig(options, 'ssh')
+  configText(options.sshBin, 'ssh.sshBin')
+  configBoolean(options.multiplex, 'ssh.multiplex')
+  configInteger(options.connectTimeoutS, 10, 1, 2_147_483_647, 'ssh.connectTimeoutS')
+  if (options.hosts !== undefined) configObject(options.hosts, 'hosts')
   const exec = options.exec ?? localExec
   const hosts = structuredClone(options.hosts ?? {})
   for (const [alias, host] of Object.entries(hosts)) checkHost(alias, host)
@@ -133,19 +131,19 @@ export function createSshTransport(options: SshOptions = {}) {
 
 const DEFAULTS = {
   connectTimeoutS: 10,
-  timeoutMs: 60_000,
-  maxBytes: 2_000_000,
-  maxChars: 20_000,
-  maxTransferBytes: 50_000_000,
+  ...COMMON_DEFAULTS,
 }
 
 /** Throws on a host entry that could be read as an ssh option or is otherwise unusable. */
 export function checkHost(alias: string, host: HostConfig): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(alias)) throw new Error(`Bad host alias "${alias}": use letters, digits, . _ -`)
-  if (typeof host?.target !== 'string' || !host.target.trim()) throw new Error(`Host "${alias}" needs a target (user@host).`)
-  if (host.target.startsWith('-') || /\s/.test(host.target)) throw new Error(`Host "${alias}": target "${host.target}" is not a valid ssh destination.`)
-  if (host.packs !== undefined && (!Array.isArray(host.packs) || host.packs.some((p) => !['ssh', 'ssh-exec', 'desktop', 'browser'].includes(p)))) throw new Error(`Host "${alias}": bad packs whitelist.`)
-  if (host.port !== undefined && (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535)) throw new Error(`Host "${alias}": bad port ${host.port}.`)
+  configObject(host, `hosts.${alias}`)
+  configKeys(host, ['target', 'packs', 'port', 'identity', 'desktop', 'browser'], `hosts.${alias}`)
+  configText(host.identity, `hosts.${alias}.identity`)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(alias)) throw new Error(`Invalid control config: Bad host alias "${alias}": use letters, digits, . _ -`)
+  if (typeof host?.target !== 'string' || !host.target.trim()) throw new Error(`Invalid control config: Host "${alias}" needs a target (user@host).`)
+  if (host.target.startsWith('-') || /\s/.test(host.target) || [...host.target].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) throw new Error(`Invalid control config: Host "${alias}": target "${host.target}" is not a valid ssh destination.`)
+  if (host.packs !== undefined && (!Array.isArray(host.packs) || host.packs.some((p) => !['ssh', 'ssh-exec', 'desktop', 'browser'].includes(p)))) throw new Error(`Invalid control config: Host "${alias}": bad packs whitelist.`)
+  if (host.port !== undefined && (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535)) throw new Error(`Invalid control config: Host "${alias}": bad port ${host.port}.`)
 }
 
 /** The ssh argument vector for a remote command on a configured host. Pure. */

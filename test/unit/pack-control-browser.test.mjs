@@ -455,3 +455,12 @@ test('browser refs: session-local snapshots and selected tabs cannot cross into 
   await assert.rejects(as('c', () => t.browser_page.execute(args())), /Select an existing tab/)
   await as('a', () => t.browser_page.execute(args()))
 })
+
+test('browser: CDP and owned SSH tunnel share the 30-second default and explicit timeout', async (ctx) => {
+  const { options } = await memory(ctx)
+  const lifetimes = []
+  const exec = (argv, opts) => { if (argv.includes('-L')) lifetimes.push(opts.timeoutMs); return options.exec(argv, opts) }
+  await tools({ ...options, exec }).browser_tabs.execute(args())
+  await tools({ ...options, exec, timeoutMs: 1234 }).browser_tabs.execute(args())
+  assert.deepEqual(lifetimes, [30_000, 1234])
+})
