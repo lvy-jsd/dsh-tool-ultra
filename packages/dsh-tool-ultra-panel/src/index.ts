@@ -58,6 +58,8 @@ export interface NodeJson {
   toolCount?: number
   tokens?: number
   highRisk?: boolean
+  /** True when the name is registered by more than one provider (this one kept). */
+  shadowed?: boolean
   category?: string
   group?: string
   children?: NodeJson[]
@@ -217,16 +219,21 @@ function nodeJson(service: ToolCatalogService, path: string): NodeJson {
 
 const sum = (tools: ToolEntry[]) => tools.reduce((total, t) => total + t.tokens, 0)
 
-const toolJson = (tool: ToolEntry) => ({
-  name: tool.name,
-  short: tool.short,
-  summary: tool.summary,
-  tokens: tool.tokens,
-  toolCount: 1,
-  highRisk: tool.highRisk === true,
-  category: tool.category,
-  group: tool.group,
-})
+const toolJson = (tool: ToolEntry): Omit<NodeJson, 'kind' | 'path'> => {
+  const out: Omit<NodeJson, 'kind' | 'path'> = {
+    name: tool.name,
+    short: tool.short,
+    summary: tool.summary,
+    tokens: tool.tokens,
+    toolCount: 1,
+    highRisk: tool.highRisk === true,
+    category: tool.category,
+    group: tool.group,
+  }
+  // Only present on a collision, so a duplicate-free directory is unchanged.
+  if (tool.shadowed) out.shadowed = true
+  return out
+}
 
 /** Find a live agent by session id. */
 function findAgent(catalog: ToolCatalogService, sessionId: unknown): Agent | null {

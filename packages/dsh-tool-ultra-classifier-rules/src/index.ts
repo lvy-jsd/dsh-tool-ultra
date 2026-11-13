@@ -48,25 +48,40 @@ export const DEFAULT_GROUP_RULES: GroupRule[] = [
   { match: '^image_\\w+$', group: 'image' },
   { match: '^nixos_env$', group: 'nix' },
   { match: '^read_page$', group: 'browser' },
+  // Tool Ultra's own retrieval tools and DSH's built-in session/shell tools.
+  { match: '^(tools|skills)_(find|route)$', group: 'tool-manager' },
+  { match: '^(list|search)_sessions$|^read_session$', group: 'session' },
+  { match: '^working_directory$', group: 'terminal' },
+  // Third-party plugins common on DSH hosts; their shared `dsh_` prefix would
+  // lump them into one uncategorized group.
+  { match: '^memory_(list|read|search|write|delete(_all)?|prune)$', group: 'memory' },
+  { match: '^dsh_delegation$', group: 'delegation' },
+  { match: '^dsh_editor_git_commit$', group: 'git' },
+  { match: '^dsh_(docs|plugins)$', group: 'dev-index' },
+  { match: '^dsh_editor_web_search$', group: 'web-search' },
+  { match: '^dsh_(editor_)?session_manager(_retries)?$', group: 'session' },
+  { match: '^cua$', group: 'cua' },
+  { match: '^terminal_(open|send|read|signal|close|list)$', group: 'terminal' },
 ]
 
 // Group -> category for groups common on DSH hosts.
 export const DEFAULT_GROUP_CATEGORIES: Record<string, string> = {
   adb: 'device', phone: 'device', desktop: 'device',
-  'phone-control': 'device', 'desktop-eyes': 'device',
-  github: 'code', nix: 'code', nixos: 'code',
+  'phone-control': 'device', 'desktop-eyes': 'device', cua: 'device',
+  github: 'code', nix: 'code', nixos: 'code', git: 'code', 'dev-index': 'code',
   'bilibili-mcp': 'media', image: 'media', video: 'media',
   amap: 'maps',
   browser: 'browser', playwright: 'browser', puppeteer: 'browser', 'chrome-devtools': 'browser',
   engram: 'memory', memory: 'memory',
   bots: 'collaboration', groups: 'collaboration', team: 'collaboration', agent: 'collaboration',
+  delegation: 'collaboration', session: 'collaboration',
   automation: 'automation', schedule: 'automation',
   mcp: 'connectors', mcp_connector: 'connectors', 'mcp-connector': 'connectors', 'mcp-resources': 'connectors',
   x: 'search',
   // MCP servers are grouped by server name; these are the names their READMEs suggest.
   search: 'search', searxng: 'search', 'web-search': 'search', 'brave-search': 'search', tavily: 'search', exa: 'search',
   email: 'mail', mail: 'mail', gmail: 'mail', imap: 'mail', outlook: 'mail',
-  secrets: 'system', capability: 'system',
+  secrets: 'system', capability: 'system', terminal: 'system', 'tool-manager': 'system',
 }
 
 // Categories the default rules use that the core's vocabulary lacks. Defined by

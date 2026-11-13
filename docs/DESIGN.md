@@ -107,7 +107,8 @@ model:
 
 - DSH core: `bash read write edit str_replace_editor glob grep read_image ask_user_question ask_user exit_plan_mode workflow todo_write present skill plan web_fetch web_search job_list job_output job_kill create_goal get_goal update_goal`
 - Delegation: `subagent subagent_fork list_subagent_models wait_agent interrupt_agent list_agents`
-- Memory lookup: `recall` (decision 2)
+- Memory lookup: `recall` (decision 2), `memory_search memory_read` (dsh-auto-memory, same reason; write operations stay lazy)
+- ds-bot: `show_view read_browser create_bot update_bot` (a Bot's prompt calls them directly; `ask_user` is in the DSH core line)
 - Entry tools: `tools_ls tools_load tools_unload`
 - Plus config `pinned`. Names the host lacks are ignored (survives renames).
 
@@ -325,6 +326,8 @@ Updated phase 2 order (user, 2026-10-15): ① production-copy trial + T12 cache 
 ```
 
 Read from every package the host loader knows (`ctx.loader.entries()`). Exact-name entries beat `match`; runtime `annotate()` beats `package.json`; user overrides beat both. Self-declaration is the most accurate source and also answers "which plugin owns this tool" without scanning.
+
+A third-party plugin may also declare its tools on the tool schema itself, with an optional `toolUltra` field: `{ category: "/memory", risk: "low" | "medium" | "high", pinned?: boolean }`. The declaration is read as an annotation *before* `package.json` and `annotate()`, so it can only raise the risk, never lower it: any explicit annotation (and the panel edits, which are last) wins over it. `risk: "high"` feeds the existing risk-gate input (`highRisk`); `pinned: true` keeps the tool always-on and out of the directory unless the user unpins it — except that a high-risk tool (from any source: settings `highRisk`, `package.json` / `annotate()`, or its own `risk: "high"`) ignores its own `pinned: true`, because pinning would keep it always-on and bypass the risk gate's approval; a pin the user sets in `settings.json` still applies. Invalid values are ignored with a log warning.
 
 ### 11.5 Hooks (implemented, plain Cordis events)
 

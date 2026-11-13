@@ -22,6 +22,23 @@ export interface ToolMeta {
   summary?: string
 }
 
+/** Risk levels a plugin can declare on its own tools. */
+export type RiskLevel = 'low' | 'medium' | 'high'
+
+/**
+ * Optional self-declaration a plugin carries on each tool schema it registers
+ * (the `toolUltra` field). The catalog prefers it over the classification
+ * logic; user settings (metadata.json, settings.json) still win over it.
+ */
+export interface ToolUltraMeta {
+  /** Category name, with or without a leading "/" (e.g. "memory" or "/memory"). */
+  category?: string
+  /** Risk level; "high" marks the tool high risk for the risk gate. */
+  risk?: RiskLevel
+  /** Always-on (pinned) tool, not listed in the directory. */
+  pinned?: boolean
+}
+
 export interface Annotation {
   source?: string
   match: string | RegExp
@@ -41,6 +58,13 @@ export interface ToolEntry {
   tokens: number
   highRisk: boolean
   annotation: ToolMeta
+  /**
+   * True when another registration uses the same name and was dropped in
+   * favor of this one (two plugins, or a pack tool and a host/other-plugin
+   * tool, registered the same name). The first registration wins, so this
+   * entry is the one that shadows the later one.
+   */
+  shadowed?: boolean
 }
 
 export interface Group {
@@ -351,6 +375,8 @@ export interface FoundTool {
   summary: string
   tokens: number
   highRisk: boolean
+  /** True when the name is registered by more than one provider (this one kept). */
+  shadowed?: boolean
 }
 
 /**

@@ -9,7 +9,7 @@
 // Grouping never decides visibility; a misplaced tool is only listed in the
 // wrong place, never lost.
 
-import type { Agent, Annotation, Catalog, CatalogNode, Category, Classifier, Group, GroupProbe, RegisteredResolver, ToolEntry, ToolMeta, ToolProbe, ToolSchema } from './types.js'
+import type { Agent, Annotation, Catalog, CatalogNode, Category, Classifier, Group, GroupProbe, Logger, RegisteredResolver, RiskLevel, ToolEntry, ToolMeta, ToolProbe, ToolSchema, ToolUltraMeta } from './types.js'
 
 export const UNCATEGORIZED = 'uncategorized'
 export const MISC_GROUP = 'misc'
@@ -76,6 +76,42 @@ export function estimateTokens(schema: unknown): number {
   let wide = 0
   for (const ch of text) if ((ch.codePointAt(0) ?? 0) > 0x2e7f) wide += 1
   return Math.ceil((text.length - wide) / 4 + wide)
+}
+
+/** Risk levels a toolUltra declaration may use. */
+export const RISK_LEVELS = ['low', 'medium', 'high'] as const
+
+/**
+ * Validate a tool schema's `toolUltra` self-declaration. Invalid values are
+ * dropped, not coerced, and reported through the logger when one is given:
+ * a bad declaration must not break the catalog.
+ */
+export function pickToolUltra(raw: unknown, name: string, logger?: Logger): ToolUltraMeta {
+  const out: ToolUltraMeta = {}
+  if (raw === undefined || raw === null) return out
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    logger?.warn?.(`tool-manager: ignoring toolUltra on ${name}: expected an object`)
+    return out
+  }
+  const { category, risk, pinned } = raw as Record<string, unknown>
+  if (category !== undefined) {
+    if (typeof category === 'string') {
+      const value = category.replace(/^\/+/, '').trim()
+      if (value) out.category = value
+      else logger?.warn?.(`tool-manager: ignoring toolUltra.category on ${name}: empty`)
+    } else {
+      logger?.warn?.(`tool-manager: ignoring toolUltra.category on ${name}: expected a string`)
+    }
+  }
+  if (risk !== undefined) {
+    if (typeof risk === 'string' && (RISK_LEVELS as readonly string[]).includes(risk)) out.risk = risk as RiskLevel
+    else logger?.warn?.(`tool-manager: ignoring toolUltra.risk on ${name}: expected "low", "medium" or "high"`)
+  }
+  if (pinned !== undefined) {
+    if (typeof pinned === 'boolean') out.pinned = pinned
+    else logger?.warn?.(`tool-manager: ignoring toolUltra.pinned on ${name}: expected a boolean`)
+  }
+  return out
 }
 
 /** Merge every annotation that applies to `name`; later annotations win per field. */
@@ -282,6 +318,58 @@ export function resolveTarget(catalog: Catalog, raw: unknown, resolvers: readonl
   const entry = group.tools.find((t) => t.short.toLowerCase() === tool || t.name.toLowerCase() === tool)
   if (!entry || parts.length > 3) return { kind: 'missing', target }
   return { kind: 'tool', tool: entry }
+}
+
+/** Code-point optimal string alignment distance (an adjacent transposition counts as one; case-sensitive; callers lowercase first). */
+function editDistance(a: string, b: string): number {
+  const x = [...a]
+  const y = [...b]
+  if (!x.length) return y.length
+  if (!y.length) return x.length
+  let prev2: number[] = []
+  let prev = Array.from({ length: y.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= x.length; i += 1) {
+    const cur = [i]
+    for (let j = 1; j <= y.length; j += 1) {
+      let cost = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1))
+      if (i > 1 && j > 1 && x[i - 1] === y[j - 2] && x[i - 2] === y[j - 1]) cost = Math.min(cost, prev2[j - 2] + 1)
+      cur[j] = cost
+    }
+    prev2 = prev
+    prev = cur
+  }
+  return prev[y.length]
+}
+
+/** The names closestNames reads from a catalog (the core Catalog satisfies it). */
+export interface NamedCatalog {
+  tools: Map<string, { name: string, short: string }>
+  groups?: Map<string, { name: string }>
+  categories?: Map<string, { name: string }>
+}
+
+/**
+ * The closest catalog names to a target that resolved to nothing, for a
+ * "did you mean" hint. Case-insensitive optimal string alignment distance over
+ * code points (an adjacent transposition counts as one, so Chinese names match
+ * too); a name that extends the target counts as one edit.
+ * Only names within a length-relative threshold are returned, so an unrelated
+ * query gets no hint at all. At most `limit` names, closest first.
+ */
+export function closestNames(catalog: NamedCatalog, target: string, limit = 3): string[] {
+  const needle = String(target ?? '').trim().replace(/^\/+/, '').toLowerCase()
+  if (!needle) return []
+  const candidates = new Set<string>()
+  for (const name of [...(catalog.categories?.keys() ?? []), ...(catalog.groups?.keys() ?? []), ...catalog.tools.keys()]) candidates.add(name)
+  for (const tool of catalog.tools.values()) candidates.add(tool.short)
+  const threshold = Math.min(3, Math.max(1, Math.floor(needle.length / 3)))
+  const scored = [...candidates].map((name) => {
+    const hay = name.toLowerCase()
+    const distance = hay.startsWith(needle) && needle.length >= 2 ? 1 : editDistance(needle, hay)
+    return { name, distance }
+  }).filter((c) => c.distance <= threshold)
+  scored.sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name))
+  return scored.slice(0, limit).map((c) => c.name)
 }
 
 /**

@@ -75,24 +75,46 @@ export function apply(ctx: ExtensionContext, config: RiskGateConfig = {}) {
   // { "<session id>": ["merge_pull_request", ...] | "*" }
   const allow: Record<string, AllowSpec> = config.allow ?? {}
 
+  /** Is this tool high-risk? Catalog declaration first, then the configured list. */
+  function isRisky(catalog: Catalog | undefined, toolName: string): boolean {
+    const tool = catalog?.tools?.get(toolName)
+    return Boolean(tool?.highRisk) || extraHighRisk.has(toolName) || extraHighRisk.has(shortOf(toolName))
+  }
+
   /** High-risk tools among the given names: catalog declaration first. */
   function riskyAmong(catalog: Catalog | undefined, names: Iterable<string>): string[] {
     const risky: string[] = []
     for (const toolName of names) {
-      const tool = catalog?.tools?.get(toolName)
-      if (tool?.highRisk || extraHighRisk.has(toolName) || extraHighRisk.has(shortOf(toolName))) risky.push(toolName)
+      if (isRisky(catalog, toolName)) risky.push(toolName)
     }
     return risky
   }
 
+  /** The pack a tool belongs to (its title), or undefined when it is in none. */
+  function packOf(toolName: string): string | undefined {
+    if (typeof ctx.toolCatalog.toolPacks !== 'function') return undefined
+    return ctx.toolCatalog.toolPacks().find((pack) => pack.tools.includes(toolName))?.title
+  }
+
+  /** Tool names for the prompt, each with its pack when one is registered. */
+  function labeled(names: string[]): string {
+    return names.map((toolName) => {
+      const pack = packOf(toolName)
+      return pack ? `${toolName} (pack: ${pack})` : toolName
+    }).join(', ')
+  }
+
   /** Tools a tools_load call would add, resolved against the caller's catalog. */
   function targetsOf(agent: Agent | undefined, args: PreExecute['arguments']): string[] {
+    const catalog = ctx.toolCatalog.get(agent)
     const names = new Set<string>()
     for (const raw of args?.targets ?? []) {
       const node = ctx.toolCatalog.resolve(raw, agent)
       if (node?.kind === 'tool') names.add(node.tool.name)
-      else if (node?.kind === 'group') for (const tool of node.group.tools) names.add(tool.name)
-      else if (node?.kind === 'category') for (const group of node.category.groups) for (const tool of group.tools) names.add(tool.name)
+      // Group and category loads skip high-risk tools (they load one at a
+      // time), so only the tools that would actually be loaded count here.
+      else if (node?.kind === 'group') for (const tool of node.group.tools.filter((t) => !isRisky(catalog, t.name))) names.add(tool.name)
+      else if (node?.kind === 'category') for (const group of node.category.groups) for (const tool of group.tools.filter((t) => !isRisky(catalog, t.name))) names.add(tool.name)
     }
     return [...names]
   }
@@ -121,12 +143,13 @@ export function apply(ctx: ExtensionContext, config: RiskGateConfig = {}) {
     // A per-session allowlist entry naming these tools skips the prompt.
     if (risky.every((toolName) => preApproved.includes(toolName) || preApproved.includes(shortOf(toolName)))) return next()
     logger.info?.(`tool-manager-risk-gate: confirming load of ${risky.join(', ')}`)
+    const list = labeled(risky)
     return {
       kind: 'ask',
-      reason: `Loading high-risk tool(s): ${risky.join(', ')}`,
+      reason: `Loading high-risk tool(s): ${list}`,
       displayReason: {
-        en: `Load high-risk tool(s)? ${risky.join(', ')}`,
-        'zh-CN': `加载高危工具？${risky.join(', ')}`,
+        en: `Load high-risk tool(s)? ${list}\nWhy: these tools are marked high-risk.\nApproving loads them into this session so the model can call them; nothing runs until the model calls one.`,
+        'zh-CN': `加载高危工具？${list}\n原因：这些工具被标记为高危。\n批准后，这些工具会被加载到当前会话，模型可以调用它们；在模型调用之前不会执行任何操作。`,
       },
     }
   }), 'tool-manager-risk-gate.pre-execute()')

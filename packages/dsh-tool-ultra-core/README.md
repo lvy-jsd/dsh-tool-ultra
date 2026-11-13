@@ -215,6 +215,39 @@ ctx.effect(() => ctx.toolCatalog.annotate('adb_install', { risk: 'high' }))
 Fields: `group`, `category`, `risk` (`"high"`), `summary`. Exact-name entries
 win over `match`; runtime annotations win over `package.json`.
 
+### Self-declaration on the tool schema
+
+A third-party plugin can also declare its tools directly on each tool schema it
+registers, with an optional `toolUltra` field:
+
+```js
+ctx.tools.register({
+  name: 'memory_note',
+  description: 'Store a note.',
+  parameters: { ... },
+  toolUltra: { category: '/memory', risk: 'low' },
+})
+```
+
+Fields: `category` (name, with or without a leading `/`), `risk`
+(`"low"` | `"medium"` | `"high"`; `"high"` marks the tool high risk for the
+risk gate), `pinned` (always-on, not listed in the directory). Invalid values
+are ignored with a log warning.
+
+Two rules keep the self-declaration from overruling an explicit decision:
+
+- `risk` can only raise the risk, never lower it: the declaration is read
+  before `package.json` / `annotate()` and the panel edits, so any explicit
+  annotation wins over it.
+- A high-risk tool (from any source: `settings.json` `highRisk`,
+  `package.json` / `annotate()`, or its own `risk: "high"`) ignores its own
+  `pinned: true`: pinning would keep it always-on and bypass the risk gate's
+  approval. A pin the user sets in `settings.json` still applies.
+
+Precedence: user settings (`metadata.json`, `settings.json`) >
+`package.json` / `annotate()` > `toolUltra` > classifiers > structural
+fallback.
+
 ### Tool packs
 
 A package of tools can register itself as a pack. It is then listed in the panel's Packs tab, and it can be loaded in one call with `tools_load(["pack:<id>"])`:
