@@ -227,7 +227,9 @@ export function apply(ctx: any, config: Config = {}) {
       permits.set(exec.token, before)
       try {
         const decision = await next()
-        if (decision && typeof decision === 'object' && 'kind' in decision && decision.kind !== 'allow') permits.delete(exec.token)
+        // A later hook may still ask (host rules, auto-review); our one-use permit survives that
+        // second question and is consumed by execute or dropped on tools/result.
+        if (decision && typeof decision === 'object' && 'kind' in decision && decision.kind !== 'allow' && decision.kind !== 'ask') permits.delete(exec.token)
         return decision
       } catch (e) { permits.delete(exec.token); throw e }
     }

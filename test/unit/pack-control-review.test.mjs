@@ -120,6 +120,22 @@ test('review: rejected, unavailable, cancelled, thrown or mutated approvals cann
   assert.equal((await h.prepare(e)).kind, 'deny')
 })
 
+test('review: a later host ask keeps the one-use permit; a later deny drops it', async () => {
+  let calls = 0
+  const h = adapter({ exec: async () => { calls++; return ok() } })
+  const args = { host: 'box', path: '/tmp/motd', content: 'x' }
+  // DSH waterfall: a downstream hook (host rules, auto-review) may still return ask.
+  const asked = h.execution('ssh_write', args)
+  assert.equal((await h.hooks['tools/pre-execute'](asked, async () => ({ kind: 'ask', reason: 'host rule' }))).kind, 'ask')
+  await h.registered.ssh_write.execute(args, asked)
+  assert.equal(calls, 1, 'approved twice must still run once')
+  await assert.rejects(h.registered.ssh_write.execute(args, asked), /no matching/)
+  const denied = h.execution('ssh_write', args)
+  assert.equal((await h.hooks['tools/pre-execute'](denied, async () => ({ kind: 'deny', reason: 'no' }))).kind, 'deny')
+  await assert.rejects(h.registered.ssh_write.execute(args, denied), /no matching/)
+  assert.equal(calls, 1)
+})
+
 test('review: inherited browser limits clamp while scoped overrides and host capabilities stay independent', async () => {
   let calls = 0
   const all = specs({ maxTransferBytes: 50_000_000, timeoutMs: 600_000, maxChars: 100, maxBytes: 100,
