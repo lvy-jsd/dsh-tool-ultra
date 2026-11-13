@@ -31,6 +31,8 @@
 //   control-desktop core + risk-gate + desktop over fake SSH hosts:
 //           native window lists/screenshots run; input needs call approval (full tier)
 //
+//   control-browser core + risk-gate + remote Chrome via fake SSH/CDP (full tier)
+//
 // Usage: node test/e2e.mjs [path/to/dsh]   (default: ~/.local/bin/dsh)
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, readdirSync, existsSync } from 'node:fs'
@@ -64,8 +66,8 @@ const profileNeeds = {
   persist: ['persist-main', 'persist-resume'], attr: ['attr-main'],
   'attr-rules': ['attr-rules-main'], exempt: ['exempt-main'], gate: ['gate-main'],
   cap: ['cap-main'], llm: ['llm-main'], devices: ['devices-main'], packs: ['packs-main'],
-  control: ['control-main', 'control-adb-disabled', 'control-desktop-disabled'], 'control-adb': ['control-adb-main'],
-  'control-desktop': ['control-desktop-main'],
+  control: ['control-main', 'control-adb-disabled', 'control-desktop-disabled', 'control-browser-disabled'], 'control-adb': ['control-adb-main'],
+  'control-desktop': ['control-desktop-main'], 'control-browser': ['control-browser-main'],
 }
 const needProfile = (name) => profileNeeds[name].some(include)
 
@@ -299,6 +301,51 @@ if (remote.includes('# DSH_DESKTOP_PROBE_V2')) {
     hosts:
       example: { target: 'root@desktop.example' }
       example-wayland: { target: 'user@wayland.example' }
+`)
+}
+
+// Each forwarding invocation starts a local fake CDP server in the fake SSH
+// subprocess. DSH itself is spawnSync'd, so the server must live outside this process.
+const fakeBrowserSsh = join(root, 'fake-browser-ssh.mjs')
+const fakeBrowserLog = join(root, 'fake-browser-ssh.jsonl')
+const browserOutputDir = join(root, 'browser-screens')
+if (needProfile('control-browser')) {
+  writeFileSync(fakeBrowserSsh, `#!${process.execPath}
+import { appendFileSync } from 'node:fs'
+import { startFakeCdp } from ${JSON.stringify(new URL('./fixtures/pack-control/fake-cdp.mjs', import.meta.url).href)}
+const argv = process.argv.slice(2), target = argv[argv.indexOf('--') + 1], command = argv.at(-1)
+appendFileSync(${JSON.stringify(fakeBrowserLog)}, JSON.stringify({ argv }) + '\\n')
+if (!['root@browser.example', 'user@secondary.example'].includes(target)) throw Error('Unexpected fake browser host')
+if (argv.includes('-L')) {
+  const spec = argv[argv.indexOf('-L') + 1].split(':')
+  if (spec[0] !== '127.0.0.1' || spec[2] !== '127.0.0.1') throw Error('Non-loopback forward')
+  if (!argv.includes('ExitOnForwardFailure=yes') || !argv.includes('ControlPath=none')) throw Error('Unowned forward')
+  const remotePort = target === 'root@browser.example' ? 9222 : 9333
+  if (Number(spec[3]) !== remotePort) throw Error('Wrong remote CDP port')
+  const server = await startFakeCdp({ port: Number(spec[1]), remotePort })
+  process.stdout.write(command.match(/DSH_FORWARD_[a-f0-9-]+/)[0] + '\\n')
+  process.stdin.resume()
+  process.stdin.on('end', async () => { await server.close() })
+} else if (command.includes('getent ahosts')) {
+  process.stdout.write('93.184.216.34 STREAM page.example\\n')
+} else throw Error('Unexpected fake browser SSH command')
+`, { mode: 0o755 })
+  makeProfile('control-browser', ['dsh-tool-ultra-core', 'dsh-tool-ultra-risk-gate', 'dsh-tool-ultra-pack-control'], `
+- id: tool-manager-risk-gate
+  name: '@lvy-jsd/dsh-tool-ultra-risk-gate'
+  config:
+    allow: { '*': true }
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs: { ssh: false, browser: true }
+    sshBin: ${fakeBrowserSsh}
+    multiplex: false
+    outputDir: ${browserOutputDir}
+    auditFile: ${join(root, 'control-browser-audit.jsonl')}
+    hosts:
+      example: { target: 'root@browser.example' }
+      secondary: { target: 'user@secondary.example', browser: { port: 9333 } }
 `)
 }
 
@@ -634,6 +681,54 @@ check('control adb: only the permitted UI call reached the adb client',
   && JSON.stringify(adbSeen[1].argv) === JSON.stringify(['-s', 'phone.example:5555', 'shell', '-T', 'sh'])
   && adbSeen[1].stdin.includes('uiautomator dump --compressed '),
   JSON.stringify(adbSeen))
+}
+
+// --- Remote browser control (full tier only, fake SSH + real local CDP WebSocket) ---
+const BROWSER = ['browser_tabs', 'browser_page', 'browser_shot', 'browser_open', 'browser_click', 'browser_type', 'browser_key', 'browser_eval'].sort()
+const browserTools = (turn) => turn.tools.filter((name) => BROWSER.includes(name)).sort()
+if (include('control-browser-disabled')) {
+const off = await run('control', 'control-browser-disabled', [
+  call('tools_ls', { path: '/browser/browser' }),
+  call('tools_load', { targets: ['pack:browser'] }),
+  { text: 'done' },
+], ['Browser pack disabled'])
+for (const turn of off) expect('control browser: disabled tools are never offered', browserTools(turn), [])
+contains('control browser: disabled directory is absent', off[1].lastContent, 'No such path: /browser/browser')
+contains('control browser: disabled pack cannot load', off[2].lastContent, /skipped pack:browser:/)
+}
+if (include('control-browser-main')) {
+console.log('# control-browser profile')
+const bt = await run('control-browser', 'control-browser-main', [
+  call('tools_ls', { path: '/browser/browser' }),                               // 0
+  call('tools_load', { targets: ['pack:browser'] }),                            // 1 (risk-gate allows pack loading)
+  call('browser_tabs', { host: 'example' }),                                   // 2
+  call('browser_page', { host: 'example', mode: 'refs' }),                      // 3
+  call('browser_page', { host: 'secondary', mode: 'text' }),                    // 4
+  call('browser_shot', { host: 'secondary' }),                                 // 5
+  call('browser_open', { host: 'example', url: 'https://page.example/' }),      // 6 refused before DNS/tunnel
+  call('browser_click', { host: 'example', ref: '00000000:1' }),                // 7 refused before stale-ref check
+  call('browser_type', { host: 'example', ref: '00000000:1', text: 'Example' }), // 8 refused
+  call('browser_key', { host: 'example', key: 'Enter' }),                       // 9 refused
+  call('tools_load', { targets: ['browser_eval'] }),                           // 10 individually load eval
+  call('browser_eval', { host: 'example', js: 'location.href' }),               // 11 refused
+  call('browser_tabs', { host: 'unknown-example' }),                           // 12 unknown alias
+  { text: 'done' },                                                           // 13
+], ['Remote browser control'])
+expect('control browser: starts hidden', browserTools(bt[0]), [])
+expect('control browser: enabled pack loads eight tools', browserTools(bt[2]), BROWSER)
+contains('control browser: tabs arrive through the SSH CDP forward', bt[3].lastContent, 'tab-example', 'untrusted_browser_content')
+contains('control browser: refs snapshot is untrusted content', bt[4].lastContent, 'untrusted_browser_content', 'Example input', /[a-f0-9]{8}:1/)
+contains('control browser: another configured remote host works', bt[5].lastContent, 'Untrusted page', 'untrusted_browser_content')
+contains('control browser: screenshot saved locally', bt[6].lastContent, `screenshot: ${browserOutputDir}`)
+const images = existsSync(browserOutputDir) ? readdirSync(browserOutputDir) : []
+check('control browser: local PNG bytes preserved', images.length === 1 && readFileSync(join(browserOutputDir, images[0])).equals(desktopPng), images.join(','))
+for (const i of [7,8,9,10,12]) contains('control browser: every mutation needs a call approval channel', bt[i].lastContent, /approval/i)
+expect('control browser: high risk tool loads individually', browserTools(bt[11]), BROWSER)
+contains('control browser: unknown alias fails without SSH', bt[13].lastContent, 'Unknown host "unknown-example"')
+const seen = existsSync(fakeBrowserLog) ? readFileSync(fakeBrowserLog, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []
+check('control browser: exactly four reads reach SSH; refused mutations cannot resolve or connect', seen.length === 4 && seen.every((s) => s.argv.includes('-L')), JSON.stringify(seen))
+expect('control browser: both fake hosts are addressed', seen.map((s) => s.argv[s.argv.indexOf('--') + 1]), ['root@browser.example','root@browser.example','user@secondary.example','user@secondary.example'])
+check('control browser: every listener is loopback and has an owned SSH process', seen.every((s) => /^127\.0\.0\.1:\d+:127\.0\.0\.1:(9222|9333)$/.test(s.argv[s.argv.indexOf('-L') + 1]) && s.argv.includes('ControlPath=none')), JSON.stringify(seen))
 }
 
 // --- Remote desktop control scenarios (full tier only) -----------------------

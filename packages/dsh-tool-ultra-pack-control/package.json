@@ -1,7 +1,7 @@
 {
   "name": "@lvy-jsd/dsh-tool-ultra-pack-control",
   "version": "0.5.0",
-  "description": "SSH, Android adb and remote Linux desktop control for Tool Ultra: configured aliases, session discovery and call approval. No npm dependencies.",
+  "description": "SSH, Android adb, remote Linux desktop and browser CDP control for Tool Ultra: configured aliases and call approval. No npm dependencies.",
   "license": "Apache-2.0",
   "author": "lvy-jsd",
   "type": "module",
@@ -41,7 +41,9 @@
     "kernelsu",
     "desktop",
     "wayland",
-    "x11"
+    "x11",
+    "browser",
+    "cdp"
   ],
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0-0"
@@ -79,7 +81,15 @@
         "desktop_type": { "group": "desktop", "category": "device", "risk": "medium" },
         "desktop_key": { "group": "desktop", "category": "device", "risk": "medium" },
         "desktop_clipboard_get": { "group": "desktop", "category": "device", "risk": "low" },
-        "desktop_clipboard_set": { "group": "desktop", "category": "device", "risk": "medium" }
+        "desktop_clipboard_set": { "group": "desktop", "category": "device", "risk": "medium" },
+        "browser_tabs": { "group": "browser", "category": "browser", "risk": "low" },
+        "browser_page": { "group": "browser", "category": "browser", "risk": "low" },
+        "browser_shot": { "group": "browser", "category": "browser", "risk": "low" },
+        "browser_open": { "group": "browser", "category": "browser", "risk": "medium" },
+        "browser_click": { "group": "browser", "category": "browser", "risk": "medium" },
+        "browser_type": { "group": "browser", "category": "browser", "risk": "medium" },
+        "browser_key": { "group": "browser", "category": "browser", "risk": "medium" },
+        "browser_eval": { "group": "browser", "category": "browser", "risk": "high" }
       }
     }
   },
@@ -87,5 +97,8 @@
     "type": "git",
     "url": "https://github.com/lvy-jsd/dsh-tool-ultra.git",
     "directory": "packages/dsh-tool-ultra-pack-control"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
