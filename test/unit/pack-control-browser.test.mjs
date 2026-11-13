@@ -275,7 +275,7 @@ test('browser: fake SSH/CDP screenshot reaches defineTool model output as an ima
   const store = { async saveImage(input) { saved.push(input); return ref } }
   apply({ tools: { register: (t) => registered.push(t) }, get: () => store, on() {} }, { ...options, auditFile: '' })
   const tool = registered.find((t) => t.name === 'browser_shot')
-  const value = await tool.execute(args())
+  const value = await tool.execute(args(), { agent: { session: { id: 'session' } } })
   const blocks = tool.output.render(args(), value)
   assert.deepEqual(blocks.map((b) => b.type), ['text', 'image'])
   assert.deepEqual(blocks[1], { type: 'image', attachment: ref })
