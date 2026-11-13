@@ -26,7 +26,8 @@ export function createAudit(file: string, warn: (message: string) => void = () =
   let ready: Promise<unknown> | undefined
   return (line) => {
     ready ??= mkdir(dirname(file), { recursive: true })
-    void ready.then(() => appendFile(file, `${JSON.stringify({ at: new Date().toISOString(), ...line })}\n`)).catch((e: Error) => {
+    // Serialize appends so completion order cannot reorder audit records.
+    ready = ready.then(() => appendFile(file, `${JSON.stringify({ at: new Date().toISOString(), ...line })}\n`)).catch((e: Error) => {
       if (!warned) warn(`tool-ultra-pack-control: cannot write audit log ${file}: ${e.message}`)
       warned = true
     })
