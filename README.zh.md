@@ -126,6 +126,9 @@ node test/e2e.mjs                  # 启动一次性 DSH 实例；绝不碰你�
 `legacy-peer-deps`）：插件旁边多一份 npm 的副本，会遮蔽你实际运行的 DSH。
 `npm install` 会改为从 `$DSH_APP`（默认 `~/.local/share/deepseek-harness/app`）链接。
 
+路由观测与评测见 [说明](docs/routing-observation.md)：包含有界审计记录、每代理结果计数、
+可选 Better Sidebar 页面及离线路由选择探针。工具选择与 schema 估算不等于实际任务成功率或总费用收益。
+
 ## 许可
 
 Apache-2.0 —— 见 [LICENSE](LICENSE)。改名为 Tool Ultra 之前的版本（`@lvy-jsd/dsh-tool-manager*`）是 MIT。

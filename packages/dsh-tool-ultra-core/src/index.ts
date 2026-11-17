@@ -101,10 +101,10 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
   // Audit is deliberately process-local and bounded; no state provider persists it.
   const auditEntries: AuditEntry[] = []
   function recordAudit(entry: Omit<AuditEntry, 'at'>) {
-    const row = { at: Date.now(), ...entry }
+    const row = { at: Date.now(), ...structuredClone(entry) }
     auditEntries.push(row)
     if (auditEntries.length > 200) auditEntries.shift()
-    ctx.emit('tool-catalog/audit', { entry: { ...row } })
+    ctx.emit('tool-catalog/audit', { entry: structuredClone(row) })
   }
   function recordPauseChange(before: boolean) {
     const paused = settings.effective().paused
@@ -391,12 +391,23 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
 
   // `tools/result` carries the deep-frozen final result after post-execute
   // policies. Observe it only: never mutate the result, never change the call.
-  ctx.effect(() => ctx.on('tools/result', (exec: { agent?: Agent }, result: { content?: unknown }) => {
+  const resultStatsByAgent = new WeakMap<Agent, { results: number, errorResults: number }>()
+  ctx.effect(() => ctx.on('tools/result', (exec: { agent?: Agent }, result: { content?: unknown, isError?: boolean }) => {
     const agent = exec?.agent
     if (!agent) return
     const cost = estimateTokens(result?.content ?? null)
     resultTokensByAgent.set(agent, (resultTokensByAgent.get(agent) ?? 0) + cost)
+    const stats = resultStatsByAgent.get(agent) ?? { results: 0, errorResults: 0 }
+    stats.results++
+    if (result?.isError === true) stats.errorResults++
+    resultStatsByAgent.set(agent, stats)
   }), 'tool-manager.result-tokens()')
+
+  ctx.effect(() => ctx.on('tool-catalog/route', (event: { agentId: string, ok: boolean, route: NonNullable<AuditEntry['route']> }) => {
+    recordAudit({ kind: 'route', agentId: event.agentId, ok: event.ok,
+      summary: `${event.route.rerank}: ${event.route.candidates.length} candidates → ${event.route.selected.length} selected`,
+      route: event.route })
+  }), 'tool-manager.route-audit()')
 
   // DSH 0.2.2+ fixes the callable tools when a step starts (`exec.toolSet`), so
   // a tool loaded during the step only becomes callable from the next one.
@@ -500,7 +511,8 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
      */
     load: (agent: Agent, targets: readonly string[], options?: LoadOptions) => loadTargets(agent, targets, options),
     unload: (agent: Agent, targets: readonly string[]) => unloadTargets(agent, targets),
-    audit: () => auditEntries.slice().reverse().map((entry) => ({ ...entry })),
+    audit: () => structuredClone(auditEntries.slice().reverse()),
+    resultStats: (agent: Agent) => ({ ...(resultStatsByAgent.get(agent) ?? { results: 0, errorResults: 0 }) }),
     clearAudit() {
       auditEntries.length = 0
       ctx.emit('tool-catalog/audit', {})
@@ -886,6 +898,7 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     try {
       await ctx.serial('tool-catalog/before-load', { agent, targets, names })
     } catch (error) {
+      recordAudit({ kind: 'load', agentId: String(agent.id), summary: `${targets.join(', ')}; hook refused`, ok: false })
       return `Load refused: ${errorText(error)}`
     }
     const pausedAfterHook = pausedRefusal(agent, targets)
@@ -933,11 +946,11 @@ export function apply(ctx: HostContext, config: CoreConfig = {}) {
     })
     const after = visibility.allowFor(agent) ?? []
     const added = after.filter((n) => !before.has(n))
-    recordAudit({ kind: 'load', agentId: String(agent.id), summary: targets.join(', '), ok: true })
     ctx.emit('tool-catalog/after-load', { agent, targets, added })
     const denied = deniedFor(agent)
     const blocked = added.filter((n) => denied.has(n))
     const callable = added.filter((n) => !denied.has(n))
+    recordAudit({ kind: 'load', agentId: String(agent.id), summary: targets.join(', '), ok: blocked.length === 0 && notes.length === 0 })
     if (blocked.length) warnDenied(blocked)
     const tokens = callable.reduce((sum, n) => sum + (cat.tools.get(n)?.tokens ?? 0), 0)
     return [

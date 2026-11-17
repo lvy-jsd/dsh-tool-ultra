@@ -133,7 +133,11 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
   const cat = (catalog ?? ctx.toolCatalog ?? (typeof ctx.get === 'function' ? ctx.get('toolCatalog') : undefined)) as ToolCatalogService | undefined
   const bm25 = new Bm25<ToolRef>({ k1: config.k1, b: config.b })
   const skillBm25 = new Bm25<SkillRef>({ k1: config.k1, b: config.b })
-  const topK = config.topK ?? 8
+  const topK = boundedLimit(config.topK, 8)
+  function boundedLimit(value: unknown, fallback = topK): number {
+    const n = Number(value)
+    return Number.isFinite(n) && n >= 1 ? Math.min(50, Math.floor(n)) : fallback
+  }
   const maxBudget = config.maxBudget ?? 20000
   const model = config.model ?? {}
   const llm = (typeof ctx.get === 'function' ? ctx.get('llm') : undefined) as LlmService | undefined
@@ -288,8 +292,9 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
    * Any failure falls back to the BM25 order, so the router never breaks on a
    * model hiccup.
    */
-  async function rerank<T extends { name: string; summary: string }>(query: string, candidates: Hit<T>[], k: number): Promise<Hit<T>[]> {
-    if (!llm || !model.provider || !model.model || candidates.length <= k) return candidates.slice(0, k)
+  type Rerank = 'skipped' | 'model' | 'fallback' | 'none'
+  async function rerank<T extends { name: string; summary: string }>(query: string, candidates: Hit<T>[], k: number): Promise<{ hits: Hit<T>[], outcome: Rerank }> {
+    if (!llm || !model.provider || !model.model || candidates.length <= k) return { hits: candidates.slice(0, k), outcome: 'skipped' }
     const list = candidates.map((c, i) => `${i + 1}. ${c.ref.name}: ${c.ref.summary}`).join('\n')
     const prompt = [
       'You are a tool router. Pick the tools that best fit the task.',
@@ -317,12 +322,14 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
         if (chunk.type === 'text-delta') text += chunk.text ?? ''
         else if (chunk.type === 'finish') finished = true
       }
-      const picks = String(text).split(/[,\s]+/).map((s) => Number.parseInt(s, 10)).filter((n) => Number.isInteger(n) && n >= 1 && n <= candidates.length)
+      if (/^none[.!]?$/i.test(text.trim())) return { hits: [], outcome: 'none' }
+      if (!/^\d+(?:[,\s]+\d+)*$/.test(text.trim())) return { hits: candidates.slice(0, k), outcome: 'fallback' }
+      const picks = text.trim().split(/[,\s]+/).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= candidates.length)
       const unique = [...new Set(picks)].slice(0, k).map((n) => candidates[n - 1])
-      return unique.length ? unique : candidates.slice(0, k)
+      return unique.length ? { hits: unique, outcome: 'model' } : { hits: candidates.slice(0, k), outcome: 'fallback' }
     } catch (caught) {
       logger?.warn?.(`tool-router: re-rank failed, using BM25 order: ${caught instanceof Error ? caught.message : String(caught)}`)
-      return candidates.slice(0, k)
+      return { hits: candidates.slice(0, k), outcome: 'fallback' }
     }
   }
 
@@ -349,7 +356,7 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      return formatFind(await searchTools(String(args.query), Number(args.limit ?? topK)))
+      return formatFind(await searchTools(String(args.query), boundedLimit(args.limit)))
     },
   }))
 
@@ -369,17 +376,40 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
       additionalProperties: false,
     },
     async execute(args, exec) {
+      const started = performance.now()
       const agent = exec?.agent
-      const want = Number(args.limit ?? topK)
+      const want = boundedLimit(args.limit)
       const candidates = await searchTools(String(args.query), Math.max(want, 10))
-      const ranked = await rerank(String(args.query), candidates, want)
-      if (args.load === false || !cat) return formatFind(ranked as Hit<ToolRef>[])
-      if (!agent) return formatFind(ranked as Hit<ToolRef>[])
-      const targets = (ranked as Hit<ToolRef>[]).map((h) => h.ref.name)
-      const loaded = await cat.load(agent, targets)
-      const result = typeof loaded === 'string' ? loaded : loaded.message
-      const budget = budgetReport(agent)
-      return budget ? `${result}\n${budget}` : result
+      const { hits: ranked, outcome } = await rerank(String(args.query), candidates, want)
+      const targets = ranked.map((h) => h.ref.name)
+      const loadRequested = args.load !== false && !!cat && !!agent
+      let ok = true
+      try {
+        if (!loadRequested || !ranked.length) return formatFind(ranked)
+        const loaded = await cat!.load(agent, targets)
+        ok = typeof loaded === 'string' ? !loaded.startsWith('Load refused:') : loaded.ok !== false
+        const result = typeof loaded === 'string' ? loaded : loaded.message
+        const budget = budgetReport(agent)
+        return budget ? `${result}\n${budget}` : result
+      } catch (error) {
+        ok = false
+        throw error
+      } finally {
+        // Observe metadata only. No intent text, tool arguments or output is retained.
+        // A failed observer must not change a tool's result or retry a side effect.
+        try {
+          const denied = loadRequested ? cat?.deniedFor?.(agent) ?? [] : []
+          const allow = loadRequested ? cat?.allowFor?.(agent) : undefined
+          const callable = allow === undefined ? null : targets.filter((name) => (allow === null || allow.includes(name)) && !denied.includes(name))
+          ctx.emit?.('tool-catalog/route', {
+            agentId: String((agent as { id?: unknown } | undefined)?.id ?? ''), ok: ok && (callable === null || callable.length === targets.length),
+            route: { candidates: candidates.map((h) => h.ref.name), selected: targets,
+              callable,
+              denied: targets.filter((name) => denied.includes(name)), rerank: outcome,
+              durationMs: Math.max(0, performance.now() - started), loadRequested },
+          })
+        } catch { logger.warn?.('tool-router: route observation unavailable') }
+      }
     },
   }))
 
@@ -399,7 +429,7 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      return formatSkillFind(await searchSkills(String(args.query), Number(args.limit ?? topK)))
+      return formatSkillFind(await searchSkills(String(args.query), boundedLimit(args.limit)))
     },
   }))
 
@@ -418,10 +448,11 @@ export function registerRouter(ctx: HostContext, config: RouterConfig = {}, cata
       additionalProperties: false,
     },
     async execute(args) {
-      const want = Number(args.limit ?? topK)
+      const want = boundedLimit(args.limit)
       const candidates = await searchSkills(String(args.query), Math.max(want, 5))
       if (!candidates.length) return 'No skills matched. Try different words.'
-      const ranked = await rerank(String(args.query), candidates, want)
+      const { hits: ranked } = await rerank(String(args.query), candidates, want)
+      if (!ranked.length) return 'No skills matched. Try different words.'
       const top = ranked[0]
       let body = ''
       try {

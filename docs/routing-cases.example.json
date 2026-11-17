@@ -1,0 +1,7 @@
+[
+  { "id": "arithmetic", "query": "calculate arithmetic expression units", "expected": ["math_eval"] },
+  { "id": "weather", "query": "weather forecast temperature rain", "expected": ["weather_forecast"] },
+  { "id": "word", "query": "read Word docx document text", "expected": ["office_doc_read"] },
+  { "id": "spreadsheet", "query": "read Excel xlsx spreadsheet rows", "expected": ["office_sheet_read"] },
+  { "id": "pdf", "query": "inspect PDF metadata pages", "expected": ["office_pdf_info"] }
+]

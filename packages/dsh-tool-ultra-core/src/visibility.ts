@@ -61,6 +61,8 @@ export function createVisibilityController(ctx: Pick<HostContext, 'tools'>, { pi
   const installed = new Map<Agent, { key: string, dispose: Disposer }>()
   const providers: RegisteredProvider[] = []   // state providers (persistence plugins)
   const touched = new Set<Agent>()             // agents mutated by a load/unload
+  const restoredAgents = new WeakSet<Agent>()
+  const runtimeParents = new WeakMap<Agent, { parent: Agent, runId: string }>()
   let agentsApi: AgentContext['agents'] | null = null
   let syncing = false
   let disposed = false
@@ -168,8 +170,12 @@ export function createVisibilityController(ctx: Pick<HostContext, 'tools'>, { pi
 
   function parentOf(agent: Agent): Agent | undefined {
     const api = agentsApi
-    if (typeof api?.isOwnedBy !== 'function') return undefined
-    return api.list().find((candidate) => candidate !== agent && api.isOwnedBy!(agent.id, candidate))
+    if (typeof api?.isOwnedBy === 'function') {
+      const legacy = api.list().find((candidate) => candidate !== agent && api.isOwnedBy!(agent.id, candidate))
+      if (legacy) return legacy
+    }
+    const parent = runtimeParents.get(agent)?.parent
+    return parent && api?.get?.(parent.id) === parent ? parent : undefined
   }
 
   /** State handed back by a provider, or null when none has any. */
@@ -198,7 +204,9 @@ export function createVisibilityController(ctx: Pick<HostContext, 'tools'>, { pi
   }
 
   function adopt(agent: Agent) {
-    states.set(agent, stateFromProviders(agent) ?? fallbackState(agent))
+    const saved = stateFromProviders(agent)
+    if (saved) restoredAgents.add(agent)
+    states.set(agent, saved ?? fallbackState(agent))
   }
 
   /** Save a state change through every provider (fire and forget). */
@@ -228,6 +236,8 @@ export function createVisibilityController(ctx: Pick<HostContext, 'tools'>, { pi
       if (touched.has(agent)) continue
       const restored = stateFromProviders(agent)
       if (restored) {
+        // Keep persistence authoritative over a later residency-start event.
+        restoredAgents.add(agent)
         states.set(agent, restored)
         install(agent)
       }
@@ -243,6 +253,8 @@ export function createVisibilityController(ctx: Pick<HostContext, 'tools'>, { pi
     touched.delete(agent)
     installed.get(agent)?.dispose?.()
     installed.delete(agent)
+    runtimeParents.delete(agent)
+    restoredAgents.delete(agent)
   }
 
   function mount(agentCtx: AgentContext): Disposer {
@@ -254,6 +266,24 @@ export function createVisibilityController(ctx: Pick<HostContext, 'tools'>, { pi
         install(agent)
       }),
       agentCtx.on('agent/disposed', ({ agent }: { agent: Agent }) => forget(agent)),
+      // DSH 0.2.2 no longer exposes agents.isOwnedBy(). Its subagent/start
+      // event publishes the residency's direct creator before prompt delivery.
+      // Do not infer authority from transcript headers or ambient initiators.
+      agentCtx.on('subagent/start', (info: { id?: unknown, parentSessionId?: unknown, runId?: unknown, local?: boolean }) => {
+        if (info?.local !== true || typeof info.runId !== 'string') return
+        const child = agentsApi?.get?.(info.id)
+        const parent = agentsApi?.get?.(info.parentSessionId)
+        if (!child || !parent || child === parent) return
+        runtimeParents.set(child, { parent, runId: info.runId })
+        if (touched.has(child) || restoredAgents.has(child)) return
+        states.set(child, fallbackState(child))
+        install(child)
+        onStateChange?.(child, serializeState(stateOf(child)))
+      }),
+      agentCtx.on('subagent/end', (info: { id?: unknown, runId?: unknown }) => {
+        const child = agentsApi?.get?.(info?.id)
+        if (child && runtimeParents.get(child)?.runId === info.runId) runtimeParents.delete(child)
+      }),
       agentCtx.on('tools/change', () => { invalidate?.(); syncAll() }),
       // A route switch (model/selection) can make an agent exempt or not; it is
       // appended before the next request, so re-evaluate right away.

@@ -286,6 +286,7 @@ export function createApi(catalog: ToolCatalogService, tidy: TidyRuntime = {}) {
           visibleNow: counts.visible,
           wireTokens: catalog.wireTokens(agent),
           resultTokens: catalog.resultTokens(agent),
+          resultStats: catalog.resultStats?.(agent) ?? null,
           loadedTools: [...state.loaded].sort(),
           groups: [...state.groups].sort(),
           handoffGroups: [...state.handoffGroups].sort(),

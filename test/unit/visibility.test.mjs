@@ -1,6 +1,49 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createVisibilityController } from '../../packages/dsh-tool-ultra-core/lib/visibility.js'
+import { buildCatalog } from '../../packages/dsh-tool-ultra-core/lib/catalog.js'
+
+function lifecycleHost() {
+  const handlers = new Map()
+  const parent = { id: 'parent', options: {} }, child = { id: 'child', options: {}, session: { header: { parentSession: 'parent' } } }
+  const live = new Map([[parent.id, parent], [child.id, child]])
+  const names = ['mcp__x__read', 'mcp__y__read']
+  const catalog = buildCatalog(names.map(name => ({ name, description: name })))
+  const vis = createVisibilityController({ tools: { schemas: () => names.map(name => ({ name })) } },
+    { pinned: () => [], getCatalog: () => catalog })
+  vis.mount({ agents: { list: () => [...live.values()], get: id => live.get(id) },
+    on: (name, fn) => { handlers.set(name, [...(handlers.get(name) ?? []), fn]); return () => {} } })
+  const fire = (name, event) => { for (const fn of handlers.get(name) ?? []) fn(event) }
+  vis.update(parent, state => { state.groups.add('x'); state.handoffGroups.add('x') })
+  return { parent, child, vis, fire, live }
+}
+
+test('new hosts inherit only from local published residency, not transcript ancestry', () => {
+  const { vis, parent, child, fire, live } = lifecycleHost()
+  assert.deepEqual(vis.allowFor(child), [])
+  assert.equal(vis.parentOf(child), undefined)
+  fire('subagent/start', { id: 'child', parentSessionId: 'parent', runId: 'external', local: false })
+  assert.deepEqual(vis.allowFor(child), [])
+  fire('subagent/start', { id: 'child', parentSessionId: 'parent', runId: 'live', local: true })
+  assert.deepEqual(vis.allowFor(child), ['mcp__x__read'])
+  assert.equal(vis.parentOf(child), parent)
+  fire('subagent/end', { id: 'child', runId: 'old-epoch' })
+  assert.equal(vis.parentOf(child), parent)
+  live.delete('parent')
+  assert.equal(vis.parentOf(child), undefined)
+  vis.dispose()
+})
+
+test('residency notification preserves explicit edits and restored child state', () => {
+  for (const persisted of [false, true]) {
+    const { vis, child, fire } = lifecycleHost()
+    if (persisted) vis.registerStateProvider({ load: agent => agent === child ? { loaded: ['mcp__y__read'] } : null })
+    else vis.update(child, state => state.loaded.add('mcp__y__read'))
+    fire('subagent/start', { id: 'child', parentSessionId: 'parent', runId: 'live', local: true })
+    assert.deepEqual(vis.allowFor(child), ['mcp__y__read'])
+    vis.dispose()
+  }
+})
 
 // A host with several live agents: the panel's Sessions view asks for each
 // agent's parent. Regression: the core used to read `ctx.agents` there, which
