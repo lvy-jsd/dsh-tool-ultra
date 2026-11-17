@@ -1,4 +1,4 @@
-// The shape every control tool is written in, shared by the DSH adapter and (later)
+// The shape every control tool is written in, shared by the DSH adapter and
 // an MCP adapter: a plain object with no host types in it.
 
 // Arguments arrive from a model as parsed JSON; each tool checks what it uses.
