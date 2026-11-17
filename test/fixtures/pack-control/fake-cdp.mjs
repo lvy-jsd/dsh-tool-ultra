@@ -121,7 +121,7 @@ export function fakeBrowser() {
   }
   return state
 }
-export async function startFakeCdp({ port = 0, remotePort = 9222, browser = fakeBrowser(), request = () => {} } = {}) {
+export async function startFakeCdp({ port = 0, socketPath, remotePort = 9222, browser = fakeBrowser(), request = () => {} } = {}) {
   const sockets = new Set()
   const server = createServer((req, res) => {
     request(req)
@@ -164,6 +164,6 @@ export async function startFakeCdp({ port = 0, remotePort = 9222, browser = fake
       }
     })
   })
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve) })
-  return { browser, port: server.address().port, close: async () => { for (const s of sockets) s.destroy(); await new Promise((r) => server.close(r)) } }
+  await new Promise((resolve, reject) => { server.once('error', reject); if (socketPath) server.listen(socketPath, resolve); else server.listen(port, '127.0.0.1', resolve) })
+  return { browser, port: socketPath ?? server.address().port, close: async () => { for (const s of sockets) s.destroy(); await new Promise((r) => server.close(r)) } }
 }

@@ -37,34 +37,50 @@ export function intArg(value: unknown, fallback: number, min: number, max: numbe
 
 const SAFE_CHARS = /^[A-Za-z0-9 _./:=@%+,-]+$/
 const SYSTEMCTL_READ = new Set(['status', 'is-active', 'is-enabled', 'is-failed', 'show', 'cat', 'list-units', 'list-unit-files', 'list-timers'])
-const JOURNALCTL_FLAGS = new Set(['-u', '--unit', '-n', '--lines', '-b', '--boot', '-p', '--priority', '-r', '--reverse', '-k', '--dmesg', '-e', '--no-pager', '-o', '--output', '--since', '--until', '--system', '--user', '-x'])
-const SIMPLE = new Set(['ls', 'cat', 'head', 'tail', 'pwd', 'uname', 'uptime', 'whoami', 'id', 'df', 'free', 'du', 'lsblk', 'lsusb', 'lspci', 'nixos-version', 'stat', 'wc', 'which', 'file', 'nproc'])
-// `hostname NAME` and `date -s` change the machine, so those two take no arguments of that kind.
+// Only exact, known flags. Never infer option arity from the next non-option:
+// systemctl -p status stop actually executes stop, not status.
+const SIMPLE_FLAGS: Record<string, string[]> = {
+  ls: ['-l', '-a', '-la', '-al', '-h', '-lh', '-lah', '--all', '--long'],
+  cat: ['-n', '-b', '-s', '-v', '-A'], head: [], tail: [], pwd: ['-L', '-P'],
+  uname: ['-a', '-s', '-r', '-m', '-srm'], uptime: ['-p', '-s'], whoami: [], id: ['-u', '-g', '-G', '-n'],
+  df: ['-h', '-T', '-i'], free: ['-h', '-m', '-g', '-b'], du: ['-h', '-s', '-sh'],
+  lsblk: ['-f', '-a'], lsusb: [], lspci: [], 'nixos-version': [], stat: [], wc: ['-l', '-c', '-w', '-m'],
+  which: ['-a'], file: ['-b', '-i'], nproc: ['--all'],
+}
 const DATE_ARGS = new Set(['-u', '--utc', '-R', '--rfc-email'])
-// A follower never ends.
-const REJECT_ARG = /^(-f|-F|--follow)$/
 
-/**
- * True when `cmd` is known to only read. `deny` are path patterns (see DEFAULT_DENY_PATHS):
- * a command that names such a path is not auto-approved, so the approval path is not a
- * way around the read tools' own refusal.
- */
+/** Only a deliberately small grammar may bypass approval. Unknown flags ask. */
 export function isReadOnlyCommand(cmd: string, deny: readonly RegExp[] = []): boolean {
   const text = cmd.trim()
   if (!text || text.length > 300 || !SAFE_CHARS.test(text)) return false
   const [first, ...rest] = text.split(/ +/)
-  if (rest.some((w) => REJECT_ARG.test(w))) return false
-  // `..` can leave the directory a word seems to name, so it is never auto-approved.
-  if (rest.some((w) => w.split('/').includes('..'))) return false
-  if (rest.some((w) => w.includes('/') && isDeniedPath(w, deny))) return false
-  if (SIMPLE.has(first)) return true
+  // Reject option=value altogether, including paths hidden behind option names.
+  if (rest.some((w) => w.includes('=') || w.split('/').includes('..') || (w.includes('/') && isDeniedPath(w, deny)))) return false
+  if (Object.hasOwn(SIMPLE_FLAGS, first)) {
+    const flags = SIMPLE_FLAGS[first]
+    for (let i = 0; i < rest.length; i++) {
+      const w = rest[i]
+      if (!w.startsWith('-')) continue
+      if ((first === 'head' || first === 'tail') && ['-n', '-c'].includes(w) && /^\d{1,8}$/.test(rest[i + 1] ?? '')) { i++; continue }
+      if (!flags.includes(w)) return false
+    }
+    return true
+  }
   if (first === 'hostname') return rest.length === 0
   if (first === 'date') return rest.every((w) => w.startsWith('+') || DATE_ARGS.has(w))
   if (first === 'systemctl') {
-    const sub = rest.find((w) => !w.startsWith('-'))
-    return sub !== undefined && SYSTEMCTL_READ.has(sub) && rest.every((w) => !w.startsWith('-') || ['--no-pager', '--failed', '--all', '-a', '--type', '-t', '--state', '--property', '-p', '--user', '--system', '-l', '--full'].includes(w.split('=')[0]))
+    if (rest.some((w) => w.startsWith('-') && !['--no-pager', '--failed', '--all', '-a', '--user', '--system', '-l', '--full'].includes(w))) return false
+    return SYSTEMCTL_READ.has(rest.find((w) => !w.startsWith('-')) ?? '')
   }
-  if (first === 'journalctl') return rest.every((w) => !w.startsWith('-') || JOURNALCTL_FLAGS.has(w.split('=')[0]))
+  if (first === 'journalctl') {
+    const values = ['-u', '--unit', '-n', '--lines', '-p', '--priority', '-o', '--output', '--since', '--until']
+    const flags = ['-b', '--boot', '-r', '--reverse', '-k', '--dmesg', '-e', '--no-pager', '--system', '--user', '-x']
+    for (let i = 0; i < rest.length; i++) {
+      if (values.includes(rest[i])) { if (!rest[i + 1] || rest[++i].startsWith('-')) return false }
+      else if (!flags.includes(rest[i])) return false
+    }
+    return true
+  }
   return false
 }
 
@@ -75,7 +91,7 @@ export const DEFAULT_DENY_PATHS: readonly string[] = [
   '^/etc/g?shadow-?$',
   '(^|/)\\.ssh/(id_[^/]*|authorized_keys)$',
   '^/etc/ssh/ssh_host_[^/]*_key$',
-  '^/proc/[^/]+/environ$',
+  '^/proc/[^/]+/(?:task/[^/]+/)?environ$',
 ]
 
 /** Collapse `.` and `..` segments of an absolute or relative POSIX path. */

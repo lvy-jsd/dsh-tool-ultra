@@ -60,7 +60,7 @@
         "ssh_log": { "group": "ssh", "category": "system", "risk": "low" },
         "ssh_run": { "group": "ssh", "category": "system", "risk": "high" },
         "ssh_write": { "group": "ssh", "category": "system", "risk": "high" },
-        "ssh_get": { "group": "ssh", "category": "system", "risk": "medium" },
+        "ssh_get": { "group": "ssh", "category": "system", "risk": "high" },
         "ssh_put": { "group": "ssh", "category": "system", "risk": "high" },
         "adb_devices": { "group": "adb", "category": "device", "risk": "low" },
         "adb_info": { "group": "adb", "category": "device", "risk": "low" },

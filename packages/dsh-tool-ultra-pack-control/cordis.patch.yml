@@ -20,7 +20,11 @@
         hosts: {}
         #  nix: { target: 'root@host.example' }
         #  box: { target: 'root@box.example', port: 2222, identity: '/root/.ssh/id_ed25519' }
-        #  example-desktop: { target: 'user@desktop.example' }
+        #  example-desktop: { target: 'user@desktop.example', packs: [desktop, browser] }
+        # Omit a host's packs whitelist to preserve legacy shared access.
+        # Optional overrides, merged over the legacy flat settings:
+        # packConfig:
+        #   browser: { timeoutMs: 30000, maxTransferBytes: 10000000 }
         # Root SSH automatically selects an active graphical user and drops to
         # that UID. With several active users, select desktop.user per host:
         # desktop: { user: example-user, backend: x11, env: { DISPLAY: ':0' } }
@@ -30,20 +34,21 @@
         # Browser CDP on remote loopback (never started automatically):
         # hosts entries may include browser: { port: 9222 }
         # browserAllowPrivate: false
-        # browser_eval always asks, even when allow matches.
+        # browser_eval, desktop mutations, SSH write/put and ADB root/push/install
+        # always ask, even when allow matches.
         # Android aliases -> wireless endpoint or serial. Pair beforehand using
         # adb pair as needed; only these targets are connected/listed/selected.
         serials: {}
         #  example-phone: 'phone.example:5555'
         #  example-usb: 'example-serial'
         # adbConnect: true
-        # adbAskInput: false
+        # adbAskInput: true
         # adbUiTtlMs: 30000
         # outputDir: /path/to/screenshots
         # Calls that skip the approval question, per session id ("*" = every
         # session). Leave empty: a session with nobody to ask is refused.
         allow: {}
-        # JSON-lines record of every call. '' turns it off. Default:
+        # JSON-lines approval/denial/result records, without text or file bodies. '' turns it off. Default:
         # <DSH_HOME>/tool-manager/control-audit.jsonl
         # auditFile: ''
         # ssh_get saves into, and ssh_put reads from, this folder (file names only).

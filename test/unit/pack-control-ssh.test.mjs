@@ -118,7 +118,7 @@ test('control: ssh_run asks unless the command is read-only, and cwd always asks
   assert.match(t.ssh_run.approve({ host: 'nix', cmd: 'rm -rf /tmp/x' }), /^nix: rm -rf \/tmp\/x/)
   assert.ok(t.ssh_run.approve({ host: 'nix', cmd: 'ls', cwd: '/etc' }))
   assert.ok(t.ssh_run.approve({ host: 'nix', cmd: 'cat /etc/shadow' }), 'a denied path is never auto-approved')
-  assert.doesNotMatch(t.ssh_run.approve({ host: 'nix', cmd: 'echo token=abc123 | tee /x' }), /abc123/, 'secrets are redacted in the prompt')
+  assert.match(t.ssh_run.approve({ host: 'nix', cmd: 'echo token=abc123 | tee /x' }), /abc123/, 'the user must see the complete command, including secret-like assignments')
   assert.ok(t.ssh_write.approve({ host: 'nix', path: '/etc/x', content: 'abc' }))
   assert.ok(t.ssh_put.approve({ host: 'nix', name: 'a', remote: '/x' }))
   assert.equal(t.ssh_get.approve, undefined)
@@ -129,7 +129,7 @@ test('control: ssh_read lists directories, pages files, and refuses credentials'
   const { exec, calls } = fake(ok('data'))
   const t = tools({ exec, multiplex: false })
   assert.equal(await t.ssh_read.execute({ host: 'nix', path: '/etc/hostname', max_bytes: 10, offset: 5 }), 'data')
-  assert.match(remoteOf(calls[0]), /tail -c \+6 -- "\$p" \| head -c 10/)
+  assert.match(remoteOf(calls[0]), /dd if="\$p" bs=65536 iflag=skip_bytes,count_bytes skip=5 count=10 status=none/)
   await assert.rejects(t.ssh_read.execute({ host: 'nix', path: '/etc/shadow' }), /credentials/)
   await assert.rejects(t.ssh_read.execute({ host: 'nix', path: '/home/x/../../etc/shadow' }), /credentials/)
   await assert.rejects(t.ssh_read.execute({ host: 'nix', path: '/root/.ssh/id_ed25519' }), /credentials/)
@@ -235,11 +235,12 @@ test('control: localExec runs without a shell, feeds stdin, and enforces limits'
 
 // --- the DSH adapter ---------------------------------------------------------------------
 
-function host(config) {
+function host(config, approval) {
   const registered = []
   const packs = []
   const hooks = {}
   const ctx = {
+    get: (name) => name === 'approval' ? approval : undefined,
     logger: { warn() {} },
     tools: { register: (def) => registered.push(def) },
     effect: (fn) => fn(),
@@ -263,11 +264,13 @@ test('control: apply registers tools and one pack per switched-on pack', () => {
 
 test('control: the gate asks for risky calls, lets read-only ones through, and honours allow', async () => {
   const h = host({ packs: { 'ssh-exec': true }, allow: { trusted: ['ssh_run'], '*': false } })
-  const hook = h.hooks['tools/pre-execute']
+  assert.equal((await h.hooks['tools/pre-execute']({ name: 'ssh_run', arguments: { host: 'nix', cmd: 'reboot' } }, async () => assert.fail('must not proceed without an approver'))).kind, 'deny')
+  const decide = gate(createTools({ hosts: HOSTS, packs: { 'ssh-exec': true } }), { trusted: ['ssh_run'], '*': false })
+  const hook = (exec, next) => decide(exec) ?? next()
   const next = async () => 'went ahead'
   const ask = await hook({ name: 'ssh_run', agent: { id: 's1' }, arguments: { host: 'nix', cmd: 'rm -rf /srv' } }, next)
   assert.equal(ask.kind, 'ask')
-  assert.match(ask.reason, /ssh_run: nix: rm -rf \/srv/)
+  assert.match(ask.displayReason.en, /ssh_run.*nix: rm -rf \/srv/)
   assert.match(ask.displayReason['zh-CN'], /允许 ssh_run/)
   assert.equal(await hook({ name: 'ssh_run', agent: { id: 's1' }, arguments: { host: 'nix', cmd: 'uptime' } }, next), 'went ahead')
   assert.equal(await hook({ name: 'ssh_read', agent: { id: 's1' }, arguments: { host: 'nix', path: '/etc/hostname' } }, next), 'went ahead')
@@ -287,12 +290,15 @@ test('control: the audit log records calls without contents and survives a missi
   const dir = await mkdtemp(join(tmpdir(), 'ctl-audit-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   const file = join(dir, 'nested', 'audit.jsonl')
-  const h = host({ auditFile: file, packs: { 'ssh-exec': true }, exec: fake(ok('x')).exec })
+  const h = host({ auditFile: file, packs: { 'ssh-exec': true }, exec: fake(ok('x')).exec }, { request: async () => 'allowed-once' })
   const write = h.registered.find((d) => d.name === 'ssh_write')
-  await write.execute({ host: 'nix', path: '/etc/motd', content: 'TOPSECRET' })
+  const args = { host: 'nix', path: '/etc/motd', content: 'TOPSECRET' }
+  const exec = { name: 'ssh_write', arguments: args, token: Symbol(), agent: { id: 'session' } }
+  await h.hooks['tools/pre-execute'](exec, async () => ({ kind: 'allow' }))
+  await write.execute(args, exec)
   await assert.rejects(h.registered.find((d) => d.name === 'ssh_read').execute({ host: 'nix', path: '/etc/shadow' }))
   await new Promise((r) => setTimeout(r, 200))
   const lines = (await readFile(file, 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
-  assert.deepEqual(lines.map((l) => [l.tool, l.ok]), [['ssh_write', true], ['ssh_read', false]])
+  assert.deepEqual(lines.map((l) => [l.tool, l.ok]), [['ssh_write', true], ['ssh_write', true], ['ssh_read', false]])
   assert.ok(!JSON.stringify(lines).includes('TOPSECRET'))
 })

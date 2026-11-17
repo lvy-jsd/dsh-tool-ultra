@@ -23,8 +23,8 @@ export interface ToolSpec<N extends string = string> {
   /** Successful `screenshot: <path>` results are attached by the DSH adapter. Plain specs retain paths. */
   screenshot?: true
   parameters: Record<string, ParamSpec>
-  /** This tool cannot bypass call approval through allow. */
-  alwaysAsk?: boolean
+  /** This tool (or matching arguments) cannot bypass call approval through allow. */
+  alwaysAsk?: boolean | ((args: Args) => boolean)
   /**
    * The reason to show in an approval prompt when this call must be confirmed,
    * or undefined when it may run without asking.
