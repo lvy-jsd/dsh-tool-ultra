@@ -16,11 +16,13 @@ export interface ParamSpec {
 
 export interface ToolSpec<N extends string = string> {
   name: N
-  /** Pack id this tool belongs to (`ssh`, `ssh-exec`, `adb`, `adb-root`, `desktop`). */
+  /** Pack id this tool belongs to (`ssh`, `ssh-exec`, `adb`, `adb-root`, `desktop`, `browser`). */
   pack: string
   risk: Risk
   description: string
   parameters: Record<string, ParamSpec>
+  /** This tool cannot bypass call approval through allow. */
+  alwaysAsk?: boolean
   /**
    * The reason to show in an approval prompt when this call must be confirmed,
    * or undefined when it may run without asking.

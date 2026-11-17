@@ -10,6 +10,8 @@
 import { mkdir, open, readFile, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { createServer } from 'node:net'
+import { randomUUID } from 'node:crypto'
 import { localExec, type Exec, type ExecResult } from './kit/exec.js'
 import { DEFAULT_DENY_PATHS, capText, intArg, isDeniedPath, isReadOnlyCommand, redact, shq } from './kit/policy.js'
 import type { ToolSpec } from './kit/spec.js'
@@ -25,6 +27,8 @@ export interface HostConfig {
   identity?: string
   /** Graphical session selection/overrides for the remote desktop pack. */
   desktop?: import('./desktop-session.js').DesktopSessionConfig
+  /** Remote loopback CDP port (default 9222). Browser is never started automatically. */
+  browser?: { port?: number }
 }
 
 export interface SshConfig {
@@ -69,7 +73,46 @@ export function createSshTransport(options: SshOptions = {}) {
     const result = await exec(sshArgv(host, remoteSh(script), argvOptions), { stdin, timeoutMs, maxBytes: bytes })
     return { result, ms: Date.now() - started }
   }
-  return { hostOf, remote }
+  /** A foreground, non-multiplexed forward owned by this call; never leaves a master forward behind. */
+  async function withForward<T>(alias: unknown, remotePort: number, use: (port: number) => Promise<T>): Promise<T> {
+    const host = hostOf(alias)
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) throw new Error('Bad remote forwarding port.')
+    for (let attempt = 0; ; attempt++) {
+      // Let the OS choose a free loopback port. SSH owns the subsequent bind;
+      // ExitOnForwardFailure plus retry handles the small reservation/bind race.
+      const reservation = createServer()
+      await new Promise<void>((resolve, reject) => { reservation.once('error', reject); reservation.listen(0, '127.0.0.1', resolve) })
+      const port = (reservation.address() as import('node:net').AddressInfo).port
+      await new Promise<void>((resolve, reject) => reservation.close((e) => e ? reject(e) : resolve()))
+      const controller = new AbortController()
+      const marker = `DSH_FORWARD_${randomUUID()}`
+      let output = ''
+      let ready!: () => void
+      let failed!: (e: Error) => void
+      const readiness = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject })
+      const argv = sshArgv(host, remoteSh(`printf '%s\\n' ${shq(marker)}; cat >/dev/null`), { ...argvOptions, multiplex: false })
+      argv.splice(argv.indexOf('--'), 0, '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'ForkAfterAuthentication=no', '-o', 'StdinNull=no', '-o', 'SessionType=default', '-o', 'GatewayPorts=no', '-o', 'PermitLocalCommand=no', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=2', '-L', `127.0.0.1:${port}:127.0.0.1:${remotePort}`)
+      const lifetime = options.timeoutMs ?? DEFAULTS.timeoutMs
+      const timer = setTimeout(() => { failed(new Error('SSH browser tunnel timed out.')); controller.abort() }, lifetime)
+      const running = Promise.resolve().then(() => exec(argv, {
+        timeoutMs: lifetime, maxBytes: 16_000, signal: controller.signal, keepStdinOpen: true,
+        onStdout: (chunk) => { output = (output + chunk.toString()).slice(-512); if (output.includes(marker + '\n')) ready() },
+      })).then((r) => { failed(new Error(`SSH browser tunnel closed: ${redact(r.stderr).slice(0, 1000) || (r.timedOut ? 'timed out' : `exit ${r.code}`)}`)); return r }, (e) => { failed(e); return undefined })
+      let established = false
+      try {
+        await readiness
+        established = true
+        return await use(port)
+      } catch (e) {
+        if (established || attempt >= 2 || !/address already in use|cannot listen/i.test(String(e))) throw e
+      } finally {
+        clearTimeout(timer)
+        controller.abort()
+        await running
+      }
+    }
+  }
+  return { hostOf, remote, withForward }
 }
 
 const DEFAULTS = {

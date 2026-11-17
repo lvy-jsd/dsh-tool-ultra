@@ -1,4 +1,5 @@
-/** SSH, Android and remote desktop packs, sharing audit and call approval. */
+/** SSH, Android, remote browser and desktop packs, sharing audit and call approval. */
+import { BROWSER_TOOL_NAMES, createBrowserTools, type BrowserConfig } from './browser.js'
 import { ADB_ROOT_TOOL_NAMES, ADB_TOOL_NAMES, createAdbTools, type AdbConfig } from './adb.js'
 import { DESKTOP_TOOL_NAMES, createDesktopTools, type DesktopConfig } from './desktop.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -13,13 +14,15 @@ export * from './kit/spec.js'
 export * from './ssh.js'
 export * from './adb.js'
 export * from './desktop.js'
+export * from './browser.js'
 
 export const name = 'tool-ultra-pack-control'
 export const inject = ['tools']
 
-export const TOOL_NAMES = [...SSH_TOOL_NAMES, ...SSH_EXEC_TOOL_NAMES, ...ADB_TOOL_NAMES, ...ADB_ROOT_TOOL_NAMES, ...DESKTOP_TOOL_NAMES] as const
+export const TOOL_NAMES = [...SSH_TOOL_NAMES, ...SSH_EXEC_TOOL_NAMES, ...ADB_TOOL_NAMES, ...ADB_ROOT_TOOL_NAMES, ...DESKTOP_TOOL_NAMES, ...BROWSER_TOOL_NAMES] as const
 
 export const PACKS = {
+  browser: { title: 'Browser (remote over SSH/CDP)', summary: 'Remote Chrome tabs via configured SSH host aliases. Read untrusted page text or numbered refs, then click/type with approval; refresh refs after input. JavaScript always asks.' },
   desktop: { title: 'Desktop (remote over SSH)', summary: 'Remote Linux desktops via configured SSH host aliases. Inspect screenshots/windows, then focus or send input with call approval. X11 and supported Wayland compositors.' },
   adb: { title: 'Android (observe and input)', summary: 'Configured Android aliases over wireless adb. Inspect with adb_ui, tap a numbered element, and refresh after input.' },
   'adb-root': { title: 'Android (shell and transfer)', summary: 'Android shell, KernelSU su, file transfers and APK installation. Root, upload and install calls ask first.' },
@@ -28,10 +31,10 @@ export const PACKS = {
 } as const
 export type PackId = keyof typeof PACKS
 
-/** `true` or "*" skips the question for every tool; a list names the tools that skip it. */
+/** `true` or "*" skips waivable questions; browser_eval always asks. A list names the tools that skip it. */
 export type AllowSpec = boolean | string | string[]
 
-export interface Config extends SshConfig, AdbConfig, DesktopConfig {
+export interface Config extends SshConfig, AdbConfig, DesktopConfig, BrowserConfig {
   /** Which packs are on. Default: ssh on, all other packs off. */
   packs?: Partial<Record<PackId, boolean>>
   /** Register only the read-only tools, whatever `packs` says. */
@@ -52,7 +55,8 @@ export function createTools(opts: CreateOptions = {}): ToolSpec[] {
   const disabled = new Set(opts.disable ?? [])
   const adb = on('adb') || on('adb-root') ? createAdbTools(opts) : []
   const desktop = on('desktop') ? createDesktopTools(opts) : []
-  return [...createSshTools(opts), ...adb, ...desktop].filter((t) => on(t.pack as PackId) && !disabled.has(t.name) && !(opts.readOnly && t.risk !== 'low'))
+  const browser = on('browser') ? createBrowserTools(opts) : []
+  return [...createSshTools(opts), ...adb, ...desktop, ...browser].filter((t) => on(t.pack as PackId) && !disabled.has(t.name) && !(opts.readOnly && t.risk !== 'low'))
 }
 
 const TEXT_OUTPUT = {
@@ -85,7 +89,7 @@ export function gate(specs: readonly ToolSpec[], allow: Record<string, AllowSpec
     const reason = spec.approve(exec.arguments ?? {})
     if (!reason) return undefined
     const session = exec.agent?.id === undefined ? '' : String(exec.agent.id)
-    if (allowed(allow[session] ?? allow['*'], spec.name)) return undefined
+    if (!spec.alwaysAsk && allowed(allow[session] ?? allow['*'], spec.name)) return undefined
     return {
       kind: 'ask' as const,
       reason: `${spec.name}: ${reason}`,
@@ -134,7 +138,7 @@ export function apply(ctx: any, config: Config = {}) {
       parameters: spec.parameters,
       output: TEXT_OUTPUT,
       // UI snapshots have per-device state used by subsequent taps.
-      isConcurrencySafe: () => spec.risk === 'low' && spec.name !== 'adb_ui',
+      isConcurrencySafe: () => spec.risk === 'low' && spec.name !== 'adb_ui' && spec.pack !== 'browser',
       async execute(args: unknown) {
         const started = Date.now()
         let ok = false

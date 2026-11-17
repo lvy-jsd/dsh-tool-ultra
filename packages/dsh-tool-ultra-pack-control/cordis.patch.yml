@@ -10,6 +10,7 @@
           adb: false
           adb-root: false
           desktop: false
+          browser: false
         # true: register only the read-only tools, whatever packs says.
         readOnly: false
         # Tools to leave out, by name (e.g. [ssh_put]).
@@ -26,6 +27,10 @@
         # Successful sessions are cached per host for 3 seconds; 0 disables it.
         # desktopCacheMs: 3000
         # See README for Wayland session/IPC and existing ydotool socket overrides.
+        # Browser CDP on remote loopback (never started automatically):
+        # hosts entries may include browser: { port: 9222 }
+        # browserAllowPrivate: false
+        # browser_eval always asks, even when allow matches.
         # Android aliases -> wireless endpoint or serial. Pair beforehand using
         # adb pair as needed; only these targets are connected/listed/selected.
         serials: {}

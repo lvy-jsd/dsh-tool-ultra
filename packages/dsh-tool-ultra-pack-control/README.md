@@ -1,6 +1,6 @@
 # @lvy-jsd/dsh-tool-ultra-pack-control
 
-SSH, Android and remote desktop control for [Tool Ultra](https://github.com/lvy-jsd/dsh-tool-ultra), written for small models: few tools, short schemas, host aliases instead of addresses. No npm dependencies; it runs system clients and remote desktop utilities.
+SSH, Android, remote desktop and browser control for [Tool Ultra](https://github.com/lvy-jsd/dsh-tool-ultra), written for small models: few tools, short schemas, host aliases instead of addresses. No npm dependencies; it runs system clients and remote desktop utilities.
 
 | Pack | Tools | Risk |
 | --- | --- | --- |
@@ -8,6 +8,7 @@ SSH, Android and remote desktop control for [Tool Ultra](https://github.com/lvy-
 | `ssh-exec` (off by default) | `ssh_run`, `ssh_write`, `ssh_put` (high), `ssh_get` (medium) | asks first |
 | `adb` (off by default) | `adb_devices`, `adb_info`, `adb_screen`, `adb_ui`, `adb_logcat`; `adb_tap`, `adb_input`, `adb_app` | low / medium |
 | `adb-root` (off by default) | `adb_shell`, `adb_push`, `adb_pull`, `adb_install` | high |
+| `browser` (off by default) | tabs, page text/refs, screenshots; open, click, type, key; eval | low / medium / high; mutations ask, eval always asks |
 | `desktop` (off by default) | screenshots, windows, clipboard read; focus, click, type, key, clipboard write | low / medium; mutations ask |
 
 Load one with `tools_load(["pack:ssh"])` or `tools_load(["pack:ssh-exec"])`.
@@ -234,10 +235,6 @@ wrapper; caching is disabled there for deterministic invocation counts.
 No physical desktop/host bridge behavior
 is proven by these fake-host tests.
 
-## Browser (planned)
-
-The browser pack is not implemented yet.
-
 ## For other front ends
 
 `createTools(options)` returns plain objects (`name`, `pack`, `risk`, `description`, `parameters`, `approve`, `describe`, `execute`) with no DSH types in them, and `gate(specs, allow)` is the approval decision. Anything that can call a function can host them. `options.exec` replaces the process runner, which is how the tests run without a network.
@@ -412,3 +409,183 @@ fake adb client. It checks disabled-pack visibility, `pack:adb` loading and UI
 parsing through DSH, and verifies that an unapproved root shell call never
 reaches the client. Loading approval is explicitly waived in that test profile
 so the root call's own approval is tested separately.
+
+## Remote browser: `browser`
+
+This opt-in pack controls Chrome/Chromium **on each configured remote host** via
+CDP over SSH. It never connects to a browser on the DSH computer. Node **22 or
+newer**, its built-in `WebSocket`, and OpenSSH are required; no npm dependencies
+are added. Browser tools work with the SSH/desktop packs disabled.
+
+```yaml
+packs: { ssh: false, browser: true }
+hosts:
+  example-browser: { target: 'user@browser.example' }
+  example-secondary:
+    target: 'root@secondary.example'
+    port: 2222
+    identity: '/example/ssh-key'
+    browser: { port: 9333 }  # default CDP port: 9222
+browserAllowPrivate: false
+# outputDir: /example/browser-screens
+# maxChars: 20000
+# maxBytes: 16000000
+# maxTransferBytes: 10000000
+# timeoutMs: 30000
+```
+
+On the **remote machine**, manually run this in the graphical user's session
+(adjust the executable/port for that host):
+
+```sh
+chromium --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.local/share/dsh-browser-profile"
+```
+
+Keep debugging bound to remote loopback; never expose the CDP port to a network.
+Verify the listener using `ss -ltnp` on that machine. Recent Chrome requires a
+**non-default user data directory** for remote debugging; see the
+[Chrome 136 change](https://developer.chrome.com/blog/remote-debugging-port).
+Use an existing dedicated debugging profile or log in to the sites in this
+profile once. This pack cannot attach retroactively to an ordinary Chrome
+process started without debugging. Missing/unreachable CDP produces this startup
+hint; nothing starts, restarts or installs a browser automatically.
+
+Root SSH works without DISPLAY, Wayland variables or graphical user discovery:
+SSH only forwards TCP and runs `getent` for URL validation. CDP controls the
+browser already running as its graphical user. The desktop pack's session
+selection/drop-UID machinery remains for desktop commands; browser tools launch
+no GUI program and need no root browser or `--no-sandbox` workaround.
+
+### Tools and workflow
+
+Every call requires `host`. `tab` is the **stable tab ID** from `browser_tabs`,
+not its display row number. With exactly one page tab it is selected
+implicitly; with several tabs, explicitly select one. Subsequent calls reuse
+the selected tab per host. If it closes, refresh the list and select again.
+
+| Tool | Additional arguments | Result / risk |
+| --- | --- | --- |
+| `browser_tabs` | — | Up to 200 page tabs, numbered rows plus stable IDs; low |
+| `browser_page` | `tab?`, `mode: text\|refs` (default text) | Plain visible body text; refs adds up to 100 visible interactive elements; low |
+| `browser_shot` | `tab?` | Viewport PNG saved locally, path for `read_image`; low |
+| `browser_open` | `url`, `tab?`, `new_tab?` (default true) | Navigation requested and stable tab ID; medium, asks |
+| `browser_click` | `ref` | Click the exact numbered element; medium, asks |
+| `browser_type` | `ref`, `text`, `submit?` | Focus editable element and insert literal text; optional Enter; medium, asks |
+| `browser_key` | `tab?`, `key` | One key/combo; medium, asks |
+| `browser_eval` | `tab?`, `js` | Arbitrary JavaScript in the page main world; high, **always asks** |
+
+Load with `tools_load(["pack:browser"])`. Pair with risk-gate for high-risk load
+approval. The call gate applies after loading: `allow` may waive the medium-risk
+questions as with desktop, but **cannot waive `browser_eval` approval**. With no
+approval channel, eval is refused even for an allowlisted unattended session.
+`readOnly` removes every browser mutation/eval tool; `disable` works normally.
+Tool/audit descriptions never include typed text, URLs or JavaScript source.
+
+Start with `browser_tabs`, then `browser_page(host, tab, mode="refs")`. Copy a
+ref exactly, such as `a1b2c3d4:3`: the suffix is the element number and the prefix
+identifies that snapshot. `browser_click`/`browser_type` select the tab bound to
+that host's snapshot, so a ref cannot silently switch to another host/tab.
+Refresh refs after every input or navigation. A new snapshot, attempted
+mutation, error or failed refresh invalidates the old refs. Navigation/reload,
+removed nodes, disabled/covered elements and lost focus refuse input rather
+than re-finding another matching element. A page can still change between the
+last geometry check and dispatch; inspect again after consequential input.
+
+Snapshot references are stored **locally**, keyed by host, tab and generation.
+Snapshot code runs in an isolated CDP world and uses `DOM.describeNode` to save
+only the elements' `backendNodeId` values, plus the main frame/loader identity.
+Each click/type creates its own isolated context and uses `DOM.resolveNode` with
+that context to obtain a fresh object handle, then `Runtime.callFunctionOn` to
+check connectivity, owner document, visibility/occlusion and editability before
+input. Navigation to a different frame/loader or a missing/detached node reports
+a stale ref. Neither context IDs nor runtime object handles survive a call;
+temporary object groups are released on success and failure. No page globals,
+attributes or instruction text hold the refs. Snapshot/click/type inspect the
+main frame's light DOM only: cross-origin frames and shadow-root traversal are
+not supported. Text is plain body text rather than Markdown; hidden fields and
+input values are not included intentionally. Typing inserts at the current
+caret/selection; it does not automatically erase existing text. Keys use the
+same bounded vocabulary as desktop (`Enter`, arrows, `ctrl+a`, etc.).
+`browser_open` returns as soon as navigation is requested; call `browser_page`
+for the resulting title/URL/content instead of assuming the page has loaded.
+
+### Tunnels, limits and trust
+
+Each call owns one **foreground** SSH process with a dynamically chosen local
+port and `-L 127.0.0.1:PORT:127.0.0.1:REMOTE_PORT`. Both ends are loopback.
+The existing SSH transport supplies alias validation, authentication, identity,
+SSH port, jump-host configuration and timeouts. Forwarding is deliberately
+**not multiplexed**, even if ordinary SSH commands use ControlMaster: a shared
+master could retain a forward after its requesting session ends. There is no
+idle tunnel/cache to dispose: success, callback errors, CDP errors, timeouts and
+abort all close the WebSocket, close stdin and kill/await the owned SSH process
+in `finally`. DSH exit closes the stdin pipe so the remote keeper and SSH session
+also end. SSH configs must permit a noninteractive remote POSIX shell, `cat`
+and local forwarding; interactive login banners must not block the session.
+
+The OS chooses the port; `ExitOnForwardFailure` confirms SSH owns the bind before
+CDP connects. Bind collisions retry up to three times **before** running any CDP
+operation; page actions are never automatically replayed. Calls serialize per
+host to preserve snapshot/input order; different aliases can run independently.
+CDP discovery never follows redirects or an advertised external WebSocket host:
+only the remote loopback browser endpoint is accepted and its path is connected
+through the owned local forward. CDP follows the upstream
+[Target](https://chromedevtools.github.io/devtools-protocol/tot/Target/) and
+[Runtime](https://chromedevtools.github.io/devtools-protocol/tot/Runtime/) domains.
+
+`browser_open` accepts only HTTP(S), rejects embedded credentials, and defaults
+to refusing private/reserved IPs, localhost/local names and private DNS answers
+(including mapped IPv6). Hostname checks use **remote** `getent ahosts`, not DSH's
+DNS. Missing getent, failed DNS, empty/mixed private answers or truncated
+validation output fail closed. `browserAllowPrivate: true` is an administrator
+opt-in for initial private destinations; it never enables file/javascript/data
+URLs. This is an initial-URL guard, **not a network sandbox**: DNS can change
+between check/use, Chrome may use different DNS/proxy settings, and redirects,
+subresources, page scripts, clicks, key input and approved eval can contact
+other destinations. Existing private tabs remain readable. Use actual browser/
+network isolation if destination restrictions must be enforced.
+
+Page titles, URLs, snapshots, eval values and CDP page errors are untrusted data.
+Model-facing page output is one JSON envelope marked
+`trust: "untrusted_browser_content"`, with an escaped `content` string and a
+`truncated` flag. Page strings never enter tool schemas, descriptions, approval
+reasons or audit summaries. This separates data from instructions; it cannot
+make arbitrary page text safe to obey.
+
+Output is capped by `maxChars` (default 20000, allowed 128–200000), including the
+JSON envelope. CDP requests/replies are checked against `maxBytes` (default 16 MB,
+range 1 KB–64 MB); discovery is limited to 64 KB. The WebSocket implementation
+assembles a message before the application checks its size. `timeoutMs`
+(default CDP 30 s; allowed 100 ms–120 s) bounds CDP requests and the SSH tunnel's
+whole lifetime (SSH default 60 s when unset). Screenshots default to at most
+10 MB (`maxTransferBytes`, range 1–40 MB) and must have a PNG signature. They use
+exclusive UUID filenames, mode 0600, under `outputDir` or
+`<transferDir or ~/dsh-transfers>/browser`. No remote screenshot file is written.
+Text/eval truncation keeps valid outer JSON; the nested content string may
+contain an incomplete representation of page data. Refs precede body text to
+keep the actionable list visible under the output cap.
+
+### Tests
+
+```sh
+npm run check
+node --test test/unit/pack-control-{ssh,adb,desktop,browser}.test.mjs
+TM_E2E_TIER=full node test/e2e.mjs /example/path/to/dsh
+```
+
+The browser unit suite uses a fake SSH runner and a local CDP HTTP/WebSocket
+server built only from Node modules. It covers aliases/ports, readOnly/disable,
+call gates, remote DNS/private URLs, untrusted/truncated content, literal input,
+ref invalidation, screenshots, protocol failures/timeouts and tunnel cleanup.
+The fake CDP assigns new sessions, contexts and object handles for each connection
+and a fresh world for every createIsolatedWorld call. Regression tests verify
+click/type across these boundaries using backend IDs, plus stale-node/navigation
+failures and temporary-handle cleanup.
+It skips listener/child-process cases when sandbox permissions prohibit them;
+an in-memory CDP test still executes the actual isolated-world snapshot/input
+scripts. For hosts that cannot fork the Node test runner, use
+`node --test --test-isolation=none ...` on Node versions supporting that option.
+The full-tier e2e profile uses two fake SSH hosts and the real built-in WebSocket
+client, checks local screenshots and proves refused calls never reach SSH. It
+requires a complete DSH installation and does not touch a real browser.
