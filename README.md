@@ -53,6 +53,45 @@ missing. See [Extending](#extending) to write your own classifier.
 
 `tools_load(["web"])` also accepts bare names: try registered `pack:` → `cap:` → `device:` namespaces, first non-empty match only, then normal directory lookup; explicit prefixes keep their behavior and plugin ownership.
 
+## Classic mode and Bot mode
+
+Tool Ultra works in any DSH profile. Two common setups:
+
+### Classic mode (DSH web profile)
+
+The plain DSH web UI, e.g. the `web` profile. Recommended install: the core,
+the rule-based classifier (optional but recommended) and the panel:
+
+```sh
+dsh plugin --profile web add @lvy-jsd/dsh-tool-ultra-core @lvy-jsd/dsh-tool-ultra-classifier-rules @lvy-jsd/dsh-tool-ultra-panel
+```
+
+Restart DSH, then open **Settings**: a **Tool manager** section (工具管理 in
+Chinese) appears in the settings sidebar.
+
+### Bot mode (a profile with ds-bot)
+
+A profile whose web UI runs in the [ds-bot](https://www.npmjs.com/package/ds-bot)
+layout (for example a profile named `space-bot`). Install the same packages
+into that profile:
+
+```sh
+dsh plugin --profile <bot-profile> add @lvy-jsd/dsh-tool-ultra-core @lvy-jsd/dsh-tool-ultra-classifier-rules @lvy-jsd/dsh-tool-ultra-panel
+```
+
+The panel is the same, but its entry point is one step further away: ds-bot
+hides DSH's Settings button, so the panel's section is reached through
+**Bot settings → Harness settings → Tool manager**.
+
+**Known limitations.**
+
+- `@lvy-jsd/dsh-tool-manager-dsbot-entry` is deprecated and no longer released.
+  It used to add a "Tool manager" row to ds-bot's settings dialog that opened
+  the panel in place; without it, use the Settings path above.
+- ds-bot's settings dialog has a fixed page list and no extension point, so a
+  row added from the outside (as dsbot-entry did) disappears if ds-bot changes
+  its dialog markup.
+
 ## Packages
 
 | Package | What it does |
