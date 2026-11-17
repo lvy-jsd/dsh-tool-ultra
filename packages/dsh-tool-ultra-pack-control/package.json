@@ -1,7 +1,7 @@
 {
   "name": "@lvy-jsd/dsh-tool-ultra-pack-control",
   "version": "0.5.0",
-  "description": "SSH and Android adb control for Tool Ultra: configured aliases, KernelSU su, file transfers and call approval. No npm dependencies.",
+  "description": "SSH, Android adb and remote Linux desktop control for Tool Ultra: configured aliases, session discovery and call approval. No npm dependencies.",
   "license": "Apache-2.0",
   "author": "lvy-jsd",
   "type": "module",
@@ -38,7 +38,10 @@
     "remote",
     "adb",
     "android",
-    "kernelsu"
+    "kernelsu",
+    "desktop",
+    "wayland",
+    "x11"
   ],
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0-0"
@@ -68,7 +71,15 @@
         "adb_shell": { "group": "adb-root", "category": "device", "risk": "high" },
         "adb_push": { "group": "adb-root", "category": "device", "risk": "high" },
         "adb_pull": { "group": "adb-root", "category": "device", "risk": "high" },
-        "adb_install": { "group": "adb-root", "category": "device", "risk": "high" }
+        "adb_install": { "group": "adb-root", "category": "device", "risk": "high" },
+        "desktop_screen": { "group": "desktop", "category": "device", "risk": "low" },
+        "desktop_windows": { "group": "desktop", "category": "device", "risk": "low" },
+        "desktop_focus": { "group": "desktop", "category": "device", "risk": "medium" },
+        "desktop_click": { "group": "desktop", "category": "device", "risk": "medium" },
+        "desktop_type": { "group": "desktop", "category": "device", "risk": "medium" },
+        "desktop_key": { "group": "desktop", "category": "device", "risk": "medium" },
+        "desktop_clipboard_get": { "group": "desktop", "category": "device", "risk": "low" },
+        "desktop_clipboard_set": { "group": "desktop", "category": "device", "risk": "medium" }
       }
     }
   },

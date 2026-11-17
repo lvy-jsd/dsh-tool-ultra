@@ -1,5 +1,6 @@
-/** SSH and Android control packs, sharing alias checks, audit and call approval. */
+/** SSH, Android and remote desktop packs, sharing audit and call approval. */
 import { ADB_ROOT_TOOL_NAMES, ADB_TOOL_NAMES, createAdbTools, type AdbConfig } from './adb.js'
+import { DESKTOP_TOOL_NAMES, createDesktopTools, type DesktopConfig } from './desktop.js'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createAudit, defaultAuditFile, type Audit } from './kit/audit.js'
 import type { ToolSpec } from './kit/spec.js'
@@ -11,13 +12,15 @@ export * from './kit/policy.js'
 export * from './kit/spec.js'
 export * from './ssh.js'
 export * from './adb.js'
+export * from './desktop.js'
 
 export const name = 'tool-ultra-pack-control'
 export const inject = ['tools']
 
-export const TOOL_NAMES = [...SSH_TOOL_NAMES, ...SSH_EXEC_TOOL_NAMES, ...ADB_TOOL_NAMES, ...ADB_ROOT_TOOL_NAMES] as const
+export const TOOL_NAMES = [...SSH_TOOL_NAMES, ...SSH_EXEC_TOOL_NAMES, ...ADB_TOOL_NAMES, ...ADB_ROOT_TOOL_NAMES, ...DESKTOP_TOOL_NAMES] as const
 
 export const PACKS = {
+  desktop: { title: 'Desktop (remote over SSH)', summary: 'Remote Linux desktops via configured SSH host aliases. Inspect screenshots/windows, then focus or send input with call approval. X11 and supported Wayland compositors.' },
   adb: { title: 'Android (observe and input)', summary: 'Configured Android aliases over wireless adb. Inspect with adb_ui, tap a numbered element, and refresh after input.' },
   'adb-root': { title: 'Android (shell and transfer)', summary: 'Android shell, KernelSU su, file transfers and APK installation. Root, upload and install calls ask first.' },
   ssh: { title: 'SSH (read-only)', summary: 'Look at remote hosts over SSH: overview, files, logs. Hosts come from the config.' },
@@ -28,7 +31,7 @@ export type PackId = keyof typeof PACKS
 /** `true` or "*" skips the question for every tool; a list names the tools that skip it. */
 export type AllowSpec = boolean | string | string[]
 
-export interface Config extends SshConfig, AdbConfig {
+export interface Config extends SshConfig, AdbConfig, DesktopConfig {
   /** Which packs are on. Default: ssh on, all other packs off. */
   packs?: Partial<Record<PackId, boolean>>
   /** Register only the read-only tools, whatever `packs` says. */
@@ -48,7 +51,8 @@ export function createTools(opts: CreateOptions = {}): ToolSpec[] {
   const on = (id: PackId) => opts.packs?.[id] ?? id === 'ssh'
   const disabled = new Set(opts.disable ?? [])
   const adb = on('adb') || on('adb-root') ? createAdbTools(opts) : []
-  return [...createSshTools(opts), ...adb].filter((t) => on(t.pack as PackId) && !disabled.has(t.name) && !(opts.readOnly && t.risk !== 'low'))
+  const desktop = on('desktop') ? createDesktopTools(opts) : []
+  return [...createSshTools(opts), ...adb, ...desktop].filter((t) => on(t.pack as PackId) && !disabled.has(t.name) && !(opts.readOnly && t.risk !== 'low'))
 }
 
 const TEXT_OUTPUT = {
