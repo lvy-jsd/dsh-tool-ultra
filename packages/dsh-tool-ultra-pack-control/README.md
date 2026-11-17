@@ -71,8 +71,8 @@ hosts:
         WAYLAND_DISPLAY: wayland-1
         XDG_RUNTIME_DIR: /run/user/1000
         SWAYSOCK: /run/user/1000/sway-ipc.example.sock
-        # Required for Wayland clicks: an existing, authorized daemon socket
-        # mapped to this graphical seat. The pack never starts a daemon.
+        # Optional override of inherited / automatically found ydotoold socket.
+        # It must serve this graphical seat. The pack never starts a daemon.
         YDOTOOL_SOCKET: /run/user/1000/example-ydotool.sock
 outputDir: /path/to/screenshots
 desktopCacheMs: 3000  # successful sessions per alias; 0 disables caching
@@ -82,7 +82,7 @@ Load with `tools_load(["pack:desktop"])`.
 
 | Tool | Arguments after required `host` | Result / risk |
 | --- | --- | --- |
-| `desktop_screen` | — | local private PNG path for `read_image` / low |
+| `desktop_screen` | — | image attachment when available + local private PNG path / low |
 | `desktop_windows` | — | native IDs, titles, apps, focus, available geometry / low |
 | `desktop_clipboard_get` | — | bounded, redacted clipboard text / low |
 | `desktop_focus` | `window` | focus exact native window ID / medium, asks |
@@ -111,8 +111,16 @@ escaped. Keys accept `ctrl`, `alt`, `shift`, `super` (`win`/`meta`), plus a lett
 digit, F1–F24, Return/Enter, Escape/Esc, Tab, Space, BackSpace, Delete, Insert,
 Home, End, PageUp/PageDown, arrow keys, `plus` or `minus`. Multiple key sequences,
 raw options, and shell fragments are refused. Coordinates are integers 0–100000.
-Multi-output layouts/scaling and ydotool pointer mapping depend on the remote
-compositor; use the window geometry and check the resulting screenshot.
+Wayland clicks pass these coordinates unchanged to `ydotool mousemove --absolute`.
+This is **not a guaranteed screenshot-pixel coordinate API**: upstream ydotool
+resets toward the top-left using large negative relative motion, then applies
+relative x/y motion. Acceleration, sensitivity, output arrangement, gaps, negative
+origins, mixed/fractional scaling and rotation can all break alignment. Even a
+single output needs its virtual pointer's acceleration/sensitivity calibrated.
+There is no automatic per-output transform. Start on a single output at scale 1
+with flat acceleration, verify a harmless click with a new screenshot, and
+calibrate before using other layouts. The pack never changes input settings.
+Do not equate niri's workspace-view geometry with global screenshot coordinates.
 
 ### Graphical sessions and prerequisites
 
@@ -163,6 +171,67 @@ next explicit call probes again. Hosts and factory instances never share cache.
 
 `hosts.<alias>.desktop.backend` can be `x11`, `sway`, `hyprland`, `niri` or generic
 `wayland`. `desktop.env` overrides are applied per host to discovery and commands.
+
+### NixOS + niri
+
+Install the prerequisites in your NixOS configuration, for example:
+
+```nix
+programs.ydotool.enable = true;
+users.users.example.extraGroups = [ "ydotool" ];
+environment.systemPackages = with pkgs; [ grim ];
+# Optional clipboard tools: wl-clipboard
+```
+
+Apply the configuration and re-login so group membership takes effect. The pack
+uses the already running `ydotoold` and the graphical user's permissions; it does
+not start services, install packages or run sudo. A minimal host entry is enough:
+
+```yaml
+hosts:
+  laptop: { target: 'example@laptop.example' }
+packs: { ssh: false, desktop: true }
+```
+
+Discovery uses remote `/proc` environments, logind and live sockets, including
+`XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, `WAYLAND_DISPLAY` and `NIRI_SOCKET`.
+niri with an Xwayland-satellite `DISPLAY=:0` still selects Wayland; partial
+Wayland environments are associated with an unambiguous live Wayland socket.
+Pure X11 keeps the existing tools. Explicit `desktop.backend` remains an override.
+
+niri uses `grim -t png -` (wlr-screencopy) and ydotool for **both mouse and keyboard**.
+For each input command, after switching to the graphical user, socket selection
+uses `desktop.env.YDOTOOL_SOCKET`, then the discovered session's `YDOTOOL_SOCKET`,
+then the first socket that exists and is writable in this order:
+
+1. `/run/ydotoold/socket` (NixOS)
+2. `$XDG_RUNTIME_DIR/ydotoold/socket`
+3. `$XDG_RUNTIME_DIR/ydotool.sock`
+4. `$XDG_RUNTIME_DIR/.ydotool_socket`
+5. `/tmp/.ydotool_socket`
+
+A selected explicit/inherited socket that is missing or inaccessible is an error;
+it does not silently fall through to another daemon. ydotool injects into a seat,
+not a window or user session. On multi-seat systems configure the socket serving
+the intended seat explicitly; session selection cannot prove the daemon's seat.
+
+`desktop.keyboard: ydotool | wtype` selects the Wayland keyboard backend per host.
+The default is ydotool on niri, wtype on other Wayland compositors. ydotool typing
+supports printable ASCII, tab and newline using US key positions; other text is
+rejected before input instead of silently losing Unicode bytes. Its key combos
+use Linux evdev codes with modifiers released in reverse order. The compositor's
+active layout and held physical modifiers still affect input. `wtype` remains
+available for UTF-8 when the compositor exposes virtual-keyboard; there is no
+automatic retry or clipboard-paste fallback that could duplicate input.
+
+`desktop_windows` queries `niri msg --json windows` and `focused-window`, then
+uses the returned native id for `niri msg action focus-window --id <id>`. A null
+focused window means no application window has focus (e.g. a layer surface).
+The two reads are consecutive snapshots, not atomic. Newer niri releases provide
+`layout`, retained in the result; `rect` is derived from tile position + window
+offset and window size, in **workspace-view logical pixels**, with `workspace_id`.
+Missing geometry on older versions stays absent. It is not global output geometry
+and must not be fed directly to ydotool as screenshot pixels.
 Supported keys are `DISPLAY`, `XAUTHORITY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`,
 `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, `SWAYSOCK`,
 `HYPRLAND_INSTANCE_SIGNATURE`, `NIRI_SOCKET`, and `YDOTOOL_SOCKET`. No PATH,
@@ -177,8 +246,8 @@ Socket paths change after login/restart; update explicit values accordingly.
 | --- | --- | --- |
 | Screenshot | `scrot -F -` | `grim -t png -` |
 | Windows / focus | `wmctrl`, `xdotool` / `xdotool` | `swaymsg`, `hyprctl` or `niri msg` |
-| Type / keys | `xdotool` | `wtype` with compositor virtual-keyboard support |
-| Click | `xdotool` | `ydotool` and an explicitly configured existing daemon socket |
+| Type / keys | `xdotool` | niri: `ydotool`; others: `wtype`; configurable with `desktop.keyboard` |
+| Click | `xdotool` | `ydotool` and an accessible existing daemon socket |
 | Clipboard | `xclip` | `wl-paste` / `wl-copy` (`wl-clipboard`) |
 
 Missing commands name the exact utility and NixOS package; nothing is
@@ -234,6 +303,48 @@ mutation leaves the SSH log untouched. Its root SSH host must use a privilege-dr
 wrapper; caching is disabled there for deterministic invocation counts.
 No physical desktop/host bridge behavior
 is proven by these fake-host tests.
+
+### Screenshot images sent to the model (desktop and browser)
+
+`desktop_screen` and `browser_shot` share the DSH adapter's image result path.
+Both first save the original bounded PNG privately. With a mounted DSH
+`attachments` service, the adapter calls `attachments.saveImage` with the actual
+PNG bytes; DSH validates/normalizes and stores the image. The canonical result
+contains the text path and durable image reference. `defineTool.output.render`
+returns **two model-facing content blocks**: text and `{ type: 'image', attachment }`,
+matching the host's built-in `read_image`. `presentResult`/`presentation.d.ts`
+describe UI presentation only and are not used to deliver the image.
+
+The installed DSH `dsh-llm-pi-ai` adapter resolves that attachment's request bytes
+and emits an image content block to its provider; OpenAI-compatible routes send
+an `image_url` data URI. This is image content, not a path/base64 string inside
+text. Configure your vision route to declare `input: [text, image]` (or the
+provider's `defaultInput`); a text-only model/adapter cannot consume these images.
+DSH can downscale images during storage or request projection. The result reports
+stored dimensions and original dimensions when normalized; DSH's request-image
+handle supplies further request scaling information. Account for both before
+measuring positions, and for the separate ydotool calibration limits above.
+
+Without an attachment service, or if its decode/limits/storage rejects the image,
+the result explicitly says **Image not attached**, explains why and retains the
+path for `read_image` or another front end. Plain `createTools().execute` callers
+still receive `screenshot: <path>`; image attachment is performed by the DSH
+adapter, not by the SSH/CDP transport. No additional capture or clipboard write
+is used for the image result.
+
+Fake-runner unit tests cover actual captured bytes reaching `saveImage`, the
+separate model image block for both tools, normalization metadata and fallback.
+The full e2e tier additionally checks actual image blocks/decoded raster bytes
+in the fake model's HTTP request. `control-desktop-niri` adds an Xwayland-enabled
+fake niri host with explicitly allowlisted focus/click/type/key calls and checks
+socket discovery and evdev command construction. These are mock-host tests;
+real NixOS/niri pointer alignment and a real vision model still need a live run.
+
+```sh
+npm run check
+node --test test/unit/pack-control-{desktop,browser}.test.mjs
+TM_E2E_TIER=full node test/e2e.mjs
+```
 
 ## For other front ends
 
@@ -562,6 +673,8 @@ whole lifetime (SSH default 60 s when unset). Screenshots default to at most
 10 MB (`maxTransferBytes`, range 1–40 MB) and must have a PNG signature. They use
 exclusive UUID filenames, mode 0600, under `outputDir` or
 `<transferDir or ~/dsh-transfers>/browser`. No remote screenshot file is written.
+The DSH adapter attaches the captured image as described in “Screenshot images
+sent to the model” above; the private PNG path is retained as well.
 Text/eval truncation keeps valid outer JSON; the nested content string may
 contain an incomplete representation of page data. Refs precede body text to
 keep the actionable list visible under the output cap.

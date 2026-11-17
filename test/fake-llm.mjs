@@ -113,6 +113,17 @@ createServer((req, res) => {
       subagent: /delegat|subagent/i.test(sys.slice(0, 20000)) && /You are a subagent|delegated/i.test(sys),
       lastRole: messages.at(-1)?.role,
       lastContent: lastContent.slice(0, 6000),
+      lastToolContent: textOf(messages.findLast((m) => m.role === 'tool')).slice(0, 6000),
+      // Inspect real provider request blocks, never a JSON-encoded textual image.
+      images: messages.flatMap((m) => Array.isArray(m.content) ? m.content : []).filter((b) => b.type === 'image_url').map((b) => {
+        const url = b.image_url?.url ?? ''
+        const match = /^data:image\/(png|jpeg|webp);base64,(.+)$/.exec(url)
+        const data = match ? Buffer.from(match[2], 'base64') : Buffer.alloc(0)
+        const image = match?.[1] === 'png' ? data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+          : match?.[1] === 'jpeg' ? data.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'))
+          : match?.[1] === 'webp' && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP'
+        return { type: b.type, bytes: data.length, image: Boolean(image) }
+      }),
     }) + '\n')
     // `openGate` creates a file the in-process test kit watches, releasing a
     // held catalog refresh (the scan's post-scan rebuild). `waitFor` holds the
