@@ -1,0 +1,65 @@
+{
+  "name": "@lvy-jsd/dsh-tool-ultra-pack-control",
+  "version": "0.5.0",
+  "description": "Tool Ultra control pack: SSH root control for small models. A read-only pack and a run/write pack, hosts from config, every changing call asks first. No npm dependencies.",
+  "license": "Apache-2.0",
+  "author": "lvy-jsd",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "!lib/.tsbuildinfo",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b .",
+    "prepack": "tsc -b ."
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-tool-ultra",
+    "tools",
+    "ssh",
+    "remote"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "toolCatalog": {
+      "tools": {
+        "ssh_hosts": { "group": "ssh", "category": "system", "risk": "low" },
+        "ssh_sys": { "group": "ssh", "category": "system", "risk": "low" },
+        "ssh_read": { "group": "ssh", "category": "system", "risk": "low" },
+        "ssh_log": { "group": "ssh", "category": "system", "risk": "low" },
+        "ssh_run": { "group": "ssh", "category": "system", "risk": "high" },
+        "ssh_write": { "group": "ssh", "category": "system", "risk": "high" },
+        "ssh_get": { "group": "ssh", "category": "system", "risk": "medium" },
+        "ssh_put": { "group": "ssh", "category": "system", "risk": "high" }
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lvy-jsd/dsh-tool-ultra.git",
+    "directory": "packages/dsh-tool-ultra-pack-control"
+  }
+}

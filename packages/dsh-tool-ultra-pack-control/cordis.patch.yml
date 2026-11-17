@@ -1,0 +1,29 @@
+# @lvy-jsd/dsh-tool-ultra-pack-control bundle patch: one loader entry.
+- insert:
+    - id: tool-ultra-pack-control
+      name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+      config:
+        # Which packs are on. ssh is read-only; ssh-exec runs commands and writes files.
+        packs:
+          ssh: true
+          ssh-exec: false
+        # true: register only the read-only tools, whatever packs says.
+        readOnly: false
+        # Tools to leave out, by name (e.g. [ssh_put]).
+        disable: []
+        # Hosts a model may name. Authentication is by key or agent only (no
+        # passwords); `target` is user@host or a Host alias from ~/.ssh/config.
+        hosts: {}
+        #  nix: { target: 'root@nixos.lan' }
+        #  box: { target: 'root@192.168.1.20', port: 2222, identity: '/root/.ssh/id_ed25519' }
+        # Calls that skip the approval question, per session id ("*" = every
+        # session). Leave empty: a session with nobody to ask is refused.
+        allow: {}
+        # JSON-lines record of every call. '' turns it off. Default:
+        # <DSH_HOME>/tool-manager/control-audit.jsonl
+        # auditFile: ''
+        # ssh_get saves into, and ssh_put reads from, this folder (file names only).
+        # transferDir: ~/dsh-transfers
+        # Extra remote path patterns (regular expressions) the read tools refuse,
+        # on top of /etc/shadow, SSH private keys and /proc/*/environ.
+        # denyPaths: []
