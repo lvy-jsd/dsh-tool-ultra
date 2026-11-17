@@ -9,6 +9,8 @@ export interface ExecOptions {
   /** Long-lived SSH forwarding: abort closes the process and its stdin. */
   signal?: AbortSignal
   keepStdinOpen?: boolean
+  /** Exploratory probes: do not mark the call scope failed on a nonzero exit. */
+  allowFailure?: boolean
   onStdout?: (chunk: Buffer) => void
 }
 
