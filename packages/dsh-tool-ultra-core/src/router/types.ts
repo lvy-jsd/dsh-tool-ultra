@@ -64,6 +64,8 @@ export interface ToolCatalogService {
   get(): { tools: Map<string, CatalogToolEntry> }
   load(agent: unknown, targets: string[]): Promise<string | { ok: false, message: string }>
   wireTokens?(agent: unknown): number
+  allowFor?(agent: unknown): string[] | null
+  deniedFor?(agent: unknown): string[]
 }
 
 /** One message from the llm stream. */
@@ -128,6 +130,7 @@ export interface HostContext {
   logger?: ((name: string) => Logger) | Logger
   get?(name: string): unknown
   on(event: string, handler: (...args: any[]) => unknown): Disposer
+  emit?(event: string, ...args: unknown[]): void
   effect(fn: () => Disposer | void, label?: string): void
 }
 

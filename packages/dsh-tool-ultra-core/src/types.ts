@@ -264,10 +264,26 @@ export interface HostContext {
  */
 export interface AuditEntry {
   at: number
-  kind: 'load' | 'unload' | 'config' | 'paused'
+  kind: 'load' | 'unload' | 'config' | 'paused' | 'route'
   agentId: string
   summary: string
   ok: boolean
+  /** No query, arguments, result text or credentials are retained. */
+  route?: {
+    candidates: string[]
+    selected: string[]
+    callable: string[] | null
+    denied: string[]
+    rerank: 'skipped' | 'model' | 'fallback' | 'none'
+    durationMs: number
+    loadRequested: boolean
+  }
+}
+
+/** Observed final tool results; errors are not necessarily failed executions. */
+export interface ResultStats {
+  results: number
+  errorResults: number
 }
 
 export interface LoadRefusal { ok: false, message: string }
@@ -447,6 +463,7 @@ export interface ToolCatalogService {
   /** Process-local timeline, newest first. */
   audit(): AuditEntry[]
   clearAudit(): void
+  resultStats(agent: Agent): ResultStats
   /** Live agents, each with its parent when it is a subagent. */
   agents(): { agent: Agent, id: string, parentId: string | null, title?: string, model?: string }[]
   /** Effective configuration, for UI display. */

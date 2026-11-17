@@ -79,6 +79,11 @@ missing. See [Extending](#extending) to write your own classifier.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the design.
 
+[Routing evidence and evaluation](docs/routing-observation.md) covers the bounded
+routing audit, per-agent result counts, optional Better Sidebar tab and offline
+selection probe. These measurements are separate from task success and actual
+provider usage.
+
 <a id="extending"></a>
 ## Extending
 

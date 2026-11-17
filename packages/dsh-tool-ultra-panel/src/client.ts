@@ -29,6 +29,7 @@ interface PanelLocale {
 interface ClientContext {
   get(name: string): unknown
   effect(fn: () => void | (() => void), label?: string): void
+  inject?(services: string[], apply: (ctx: ClientContext) => void): unknown
 }
 
 ;(window as unknown as { __ModuleLoader__: ModuleLoader }).__ModuleLoader__.load({
@@ -75,6 +76,7 @@ interface ClientContext {
       installed: number
       visibleNow: number
       resultTokens: number
+      resultStats?: { results: number, errorResults: number } | null
       handoffGroups: string[]
       handoffTools: string[]
       wireTokens: number
@@ -83,10 +85,12 @@ interface ClientContext {
     }
     interface AuditRow {
       at: number
-      kind: 'load' | 'unload' | 'config' | 'paused'
+      kind: 'load' | 'unload' | 'config' | 'paused' | 'route'
       agentId: string
       summary: string
       ok: boolean
+      route?: { candidates: string[], selected: string[], callable: string[] | null,
+        denied: string[], rerank: string, durationMs: number, loadRequested: boolean }
     }
     interface ConfigJson {
       paused?: boolean
@@ -327,6 +331,19 @@ interface ClientContext {
       'audit.unload': 'Unloaded',
       'audit.config': 'Settings changed',
       'audit.paused': 'Loading blocked by pause',
+      'audit.route': 'Tool routing',
+      'audit.candidates': 'Candidates',
+      'audit.selected': 'Selected',
+      'audit.callable': 'Callable after routing',
+      'audit.denied': 'Denied by other layers',
+      'audit.notObserved': 'Not observed',
+      'audit.routeSummary': '{candidates} candidates → {selected} selected',
+      'rerank.skipped': 'BM25 only',
+      'rerank.model': 'Model reranked',
+      'rerank.fallback': 'BM25 fallback',
+      'rerank.none': 'Model chose no match',
+      'results.observed': 'Observed tool results / error results',
+      'results.hint': 'Final results include policy refusals; these counts are not task success rates.',
       'permissions.title': 'What tool permissions mean',
       'permissions.read': 'Read: look at a file',
       'permissions.write': 'Write: change or create a file',
@@ -521,6 +538,19 @@ interface ClientContext {
       'audit.unload': '卸载',
       'audit.config': '设置变更',
       'audit.paused': '因暂停而未加载',
+      'audit.route': '工具路由',
+      'audit.candidates': '检索候选',
+      'audit.selected': '选择结果',
+      'audit.callable': '下一步可调用',
+      'audit.denied': '被其他权限层拒绝',
+      'audit.notObserved': '未观测',
+      'audit.routeSummary': '{candidates} 个候选 → 选择 {selected} 个',
+      'rerank.skipped': '仅 BM25 检索',
+      'rerank.model': '模型已重排',
+      'rerank.fallback': '回退到 BM25',
+      'rerank.none': '模型认为没有匹配项',
+      'results.observed': '已观测工具结果 / 错误结果',
+      'results.hint': '结果包含权限拒绝等情况，不能用这些计数推断任务成功率。',
       'permissions.title': '工具权限的含义',
       'permissions.read': '读取：查看一个文件',
       'permissions.write': '写入：修改或创建一个文件',
@@ -1169,7 +1199,8 @@ interface ClientContext {
           metric('visible', session?.visibleNow, session && Number.isFinite(session.installed) ? format(t, 'overview.installed', { n: session.installed }) : t('unavailable')),
           metric('groups', session?.groups.length, t('overview.groupsHint')),
           metric('wire', session?.wireTokens, t('overview.wireHint'), 'wireTokens'),
-          metric('result', session?.resultTokens, t('overview.resultHint'), 'resultTokens')))
+          metric('result', session?.resultTokens, t('overview.resultHint'), 'resultTokens')),
+        h('p', { className: 'tmp-muted', title: t('results.hint') }, `${t('results.observed')}: ${number(session?.resultStats?.results)} / ${number(session?.resultStats?.errorResults)}`))
     }
 
     function Audit({ t, entries, clear }: { t: Translate, entries: AuditRow[] | null, clear: () => Promise<void> }) {
@@ -1181,12 +1212,16 @@ interface ClientContext {
         entries === null ? h('p', { className: 'tmp-muted' }, t('unavailable'))
           : entries.length === 0 ? h('p', { className: 'tmp-muted' }, t('audit.empty'))
             : h('ol', { className: 'tmp-audit' }, ...entries.map((entry, i) =>
-              h('li', { key: `${entry.at}:${i}`, 'data-tone': entry.kind === 'paused' && !entry.ok ? 'warn' : undefined, title: entry.agentId },
+              h('li', { key: `${entry.at}:${i}`, 'data-tone': !entry.ok ? 'warn' : undefined, title: entry.agentId },
                 h('time', { dateTime: new Date(entry.at).toISOString() }, new Date(entry.at).toLocaleTimeString()),
-                ` · ${t(`audit.${entry.kind}`)} · ${entry.summary}`))))
+                ` · ${t(`audit.${entry.kind}`)} · ${entry.route ? format(t, 'audit.routeSummary', { candidates: entry.route.candidates.length, selected: entry.route.selected.length }) : entry.summary}`,
+                entry.route ? h('details', null,
+                  h('summary', null, `${t(`rerank.${entry.route.rerank}`)} · ${Math.round(entry.route.durationMs)} ms`),
+                  ...(['candidates', 'selected', 'callable', 'denied'] as const).map((key) =>
+                    h('p', { key }, `${t(`audit.${key}`)}: ${entry.route![key]?.join(', ') || (entry.route![key] === null ? t('audit.notObserved') : '—')}`))) : null))))
     }
 
-    function ToolManagerSection({ t }: { t: Translate }) {
+    function ToolManagerSection({ t, sessionId }: { t: Translate, sessionId?: string }) {
       ensureCss()
       const [tab, setTab] = useState('overview')
       const [path, setPath] = useState('/')
@@ -1275,7 +1310,9 @@ interface ClientContext {
         return () => { clearInterval(interval); events?.close(); clearTimeout(timer.current) }
       }, [refreshSessions, refreshTools, refreshAudit, refreshConfig])
 
-      const target = sessions?.some((s) => s.id === selected) ? selected : sessions?.[0]?.id ?? null
+      const wanted = selected ?? sessionId
+      // A scoped sidebar must never silently control another live session.
+      const target = sessions?.some((s) => s.id === wanted) ? wanted! : sessionId ? null : sessions?.[0]?.id ?? null
       const load: Load = async (targets) => {
         if (!target) return say(t('noSession'))
         try {
@@ -1377,7 +1414,7 @@ interface ClientContext {
       const bound: Translate = locale ? locale.bind(NS) : (key) => en[key] ?? key
       // The host passes `t` for a slot registered with `locale`; fall back to
       // our own binding so the section renders either way.
-      const Section = (props: { t?: Translate }) => h(ToolManagerSection, { ...props, t: props.t ?? bound })
+      const Section = (props: { t?: Translate, sessionId?: string }) => h(ToolManagerSection, { ...props, t: props.t ?? bound })
       ctx.effect(() => slots.inject('settings.section', () => slots.register({
         name: 'settings.section',
         id: ID,
@@ -1385,6 +1422,19 @@ interface ClientContext {
         label: () => bound('nav'),
         locale: NS,
       }, Section)), 'tool-manager-panel: settings section')
+      // Optional, disposal-owned integration: no sidebar package is required by
+      // the settings panel, and both surfaces use the same server/load path.
+      ctx.inject?.(['betterSidebar'], (sidebarCtx) => {
+        const sidebar = sidebarCtx.get('betterSidebar') as {
+          registerTab(tab: { id: string, title: string, single: boolean,
+            component: (props: { scope?: { sessionId?: string }, visible?: boolean }) => ReactNode }): () => void
+        } | undefined
+        if (!sidebar) return
+        sidebarCtx.effect(() => sidebar.registerTab({
+          id: 'tool-ultra', title: 'Tool Ultra', single: true,
+          component: ({ scope, visible }) => visible === false ? null : h(Section, { key: scope?.sessionId, sessionId: scope?.sessionId }),
+        }), 'tool-manager-panel: optional sidebar tab')
+      })
     }
 
     // ToolManagerSection and NS are exported so another entry point (for example
