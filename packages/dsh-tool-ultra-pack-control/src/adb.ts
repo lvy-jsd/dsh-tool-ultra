@@ -7,13 +7,14 @@ import { randomUUID } from 'node:crypto'
 import { localExec, type Exec, type ExecOptions, type ExecResult } from './kit/exec.js'
 import { DEFAULT_DENY_PATHS, capText, intArg, isDeniedPath, isReadOnlyCommand, redact, shq } from './kit/policy.js'
 import { readTransfer } from './kit/files.js'
+import { COMMON_DEFAULTS, checkCommonConfig, configBoolean, configInteger, configObject, configText, type CommonConfig } from './kit/config.js'
 import { sessionKey } from './kit/scope.js'
 import type { ToolSpec } from './kit/spec.js'
 
 export const ADB_TOOL_NAMES = ['adb_devices', 'adb_info', 'adb_screen', 'adb_ui', 'adb_tap', 'adb_input', 'adb_app', 'adb_logcat'] as const
 export const ADB_ROOT_TOOL_NAMES = ['adb_shell', 'adb_push', 'adb_pull', 'adb_install'] as const
 
-export interface AdbConfig {
+export interface AdbConfig extends CommonConfig {
   /** Alias -> adb serial or wireless host:port. Only aliases are tool arguments. */
   serials?: Record<string, string>
   adbBin?: string
@@ -24,22 +25,16 @@ export interface AdbConfig {
   /** Numbered UI snapshots expire after this time. Default 30000 ms. */
   adbUiTtlMs?: number
   outputDir?: string
-  transferDir?: string
-  timeoutMs?: number
-  maxBytes?: number
-  maxChars?: number
-  maxTransferBytes?: number
-  denyPaths?: string[]
 }
 export interface AdbOptions extends AdbConfig { exec?: Exec }
 
 export function checkSerial(alias: string, serial: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(alias)) throw new Error(`Bad device alias "${alias}".`)
-  if (typeof serial !== 'string' || !serial || serial.length > 200) throw new Error(`Bad adb serial for "${alias}".`)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(alias)) throw new Error(`Invalid control config: Bad device alias "${alias}".`)
+  if (typeof serial !== 'string' || !serial || serial.length > 200) throw new Error(`Invalid control config: Bad adb serial for "${alias}".`)
   if (serial.includes(':')) {
     const endpoint = /^(?:[A-Za-z0-9][A-Za-z0-9.-]*|\[[A-Fa-f0-9:]+\]):([0-9]{1,5})$/.exec(serial)
-    if (!endpoint || Number(endpoint[1]) < 1 || Number(endpoint[1]) > 65535) throw new Error(`Bad wireless adb endpoint for "${alias}"; use host:port.`)
-  } else if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(serial)) throw new Error(`Bad adb serial for "${alias}".`)
+    if (!endpoint || Number(endpoint[1]) < 1 || Number(endpoint[1]) > 65535) throw new Error(`Invalid control config: Bad wireless adb endpoint for "${alias}"; use host:port.`)
+  } else if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(serial)) throw new Error(`Invalid control config: Bad adb serial for "${alias}".`)
 }
 
 export interface UiElement {
@@ -110,15 +105,22 @@ function resultText(r: ExecResult, maxChars: number): string {
 }
 
 export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
+  checkCommonConfig(options, 'adb')
+  configText(options.adbBin, 'adb.adbBin')
+  configText(options.outputDir, 'adb.outputDir')
+  configBoolean(options.adbConnect, 'adb.adbConnect')
+  configBoolean(options.adbAskInput, 'adb.adbAskInput')
+  configInteger(options.adbUiTtlMs, 30_000, 0, 2_147_483_647, 'adb.adbUiTtlMs')
+  if (options.serials !== undefined) configObject(options.serials, 'adb.serials')
   const exec = options.exec ?? localExec
   // Copy to prevent config mutation from changing an already approved target.
   const serials = { ...options.serials }
   for (const [alias, serial] of Object.entries(serials)) checkSerial(alias, serial)
   if (new Set(Object.values(serials)).size !== Object.keys(serials).length) throw new Error('Each adb target must have a unique alias.')
   const bin = options.adbBin ?? 'adb'
-  const maxChars = options.maxChars ?? 20_000
-  const maxBytes = options.maxBytes ?? 2_000_000
-  const maxTransfer = options.maxTransferBytes ?? 50_000_000
+  const maxChars = options.maxChars ?? COMMON_DEFAULTS.maxChars
+  const maxBytes = options.maxBytes ?? COMMON_DEFAULTS.maxBytes
+  const maxTransfer = options.maxTransferBytes ?? COMMON_DEFAULTS.maxTransferBytes
   const transferDir = options.transferDir ?? join(homedir(), 'dsh-transfers')
   const outputDir = options.outputDir ?? join(transferDir, 'screens')
   const deny = [...DEFAULT_DENY_PATHS, ...(options.denyPaths ?? [])].map((p) => new RegExp(p))
@@ -145,7 +147,7 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
     if (value !== undefined && typeof value !== 'boolean') throw new Error('root must be a boolean.')
     return value === true
   }
-  const run = (argv: string[], extra: ExecOptions = {}) => exec([bin, ...argv], { timeoutMs: options.timeoutMs ?? 60_000, maxBytes, ...extra })
+  const run = (argv: string[], extra: ExecOptions = {}) => exec([bin, ...argv], { timeoutMs: options.timeoutMs ?? COMMON_DEFAULTS.timeoutMs, maxBytes, ...extra })
   async function connect(alias: string) {
     if (options.adbConnect === false || !serials[alias].includes(':')) return
     const r = await run(['connect', serials[alias]], { timeoutMs: 15_000, maxBytes: 10_000 })
@@ -359,7 +361,7 @@ export function createAdbTools(options: AdbOptions = {}): ToolSpec[] {
         const root = rootOf(a?.root)
         if (typeof a?.cmd !== 'string' || !a.cmd.trim() || a.cmd.includes('\0')) throw new Error('Give a shell command without NUL bytes.')
         invalidate(alias)
-        return resultText(await shell(alias, a.cmd, root, { timeoutMs: intArg(a?.timeout_s, Math.round((options.timeoutMs ?? 60_000) / 1000), 1, 600) * 1000 }), maxChars)
+        return resultText(await shell(alias, a.cmd, root, { timeoutMs: intArg(a?.timeout_s, Math.round((options.timeoutMs ?? COMMON_DEFAULTS.timeoutMs) / 1000), 1, 600) * 1000 }), maxChars)
       },
     },
     {

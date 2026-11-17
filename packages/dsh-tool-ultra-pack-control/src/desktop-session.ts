@@ -1,6 +1,7 @@
 // The remote probe transports data, never shell assignments to evaluate. Session
 // selection happens locally; graphical values are quoted only after selection.
 import { shq } from './kit/policy.js'
+import { configKeys } from './kit/config.js'
 
 export const DESKTOP_ENV = ['DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'SWAYSOCK', 'HYPRLAND_INSTANCE_SIGNATURE', 'NIRI_SOCKET', 'YDOTOOL_SOCKET'] as const
 export const DESKTOP_BACKENDS = ['x11', 'sway', 'hyprland', 'niri', 'wayland'] as const
@@ -27,13 +28,14 @@ export interface DesktopBackend {
 const USER = /^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}\$?|\d{1,10})$/
 const SESSION = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 export function checkDesktopSession(config: DesktopSessionConfig = {}): void {
-  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('desktop must be a session configuration object.')
-  if (config.user !== undefined && (typeof config.user !== 'string' || !USER.test(config.user))) throw new Error('desktop.user must be an account name or numeric UID.')
-  if (config.backend !== undefined && !DESKTOP_BACKENDS.includes(config.backend)) throw new Error('Bad desktop backend: use x11, sway, hyprland, niri or wayland.')
-  if (config.keyboard !== undefined && !['ydotool', 'wtype'].includes(config.keyboard)) throw new Error('desktop.keyboard must be ydotool or wtype.')
-  if (config.env !== undefined && (!config.env || typeof config.env !== 'object' || Array.isArray(config.env))) throw new Error('desktop.env must be an object.')
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Invalid control config: desktop must be a session configuration object.')
+  configKeys(config, ['user', 'backend', 'keyboard', 'env'], 'desktop')
+  if (config.user !== undefined && (typeof config.user !== 'string' || !USER.test(config.user))) throw new Error('Invalid control config: desktop.user must be an account name or numeric UID.')
+  if (config.backend !== undefined && !DESKTOP_BACKENDS.includes(config.backend)) throw new Error('Invalid control config: Bad desktop backend: use x11, sway, hyprland, niri or wayland.')
+  if (config.keyboard !== undefined && !['ydotool', 'wtype'].includes(config.keyboard)) throw new Error('Invalid control config: desktop.keyboard must be ydotool or wtype.')
+  if (config.env !== undefined && (!config.env || typeof config.env !== 'object' || Array.isArray(config.env))) throw new Error('Invalid control config: desktop.env must be an object.')
   for (const [key, value] of Object.entries(config.env ?? {})) {
-    if (!(DESKTOP_ENV as readonly string[]).includes(key) || typeof value !== 'string' || value.length > 4096 || /[\0\r\n]/.test(value)) throw new Error(`Invalid desktop environment override: ${key}.`)
+    if (!(DESKTOP_ENV as readonly string[]).includes(key) || typeof value !== 'string' || value.length > 4096 || /[\0\r\n]/.test(value)) throw new Error(`Invalid control config: Invalid desktop environment override: ${key}.`)
   }
 }
 

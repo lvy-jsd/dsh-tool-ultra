@@ -148,7 +148,7 @@ test('review: inherited browser limits clamp while scoped overrides and host cap
   await assert.rejects(all.ssh_run.execute({ host: 'reader', cmd: 'uptime' }), /No ssh hosts/)
   await assert.rejects(all.browser_tabs.execute({ host: 'reader' }), /Unknown host/)
   assert.equal(calls, 0)
-  assert.throws(() => specs({ packConfig: { browser: { timeoutMs: 120_001 } } }), /browser timeoutMs/)
+  assert.throws(() => specs({ packConfig: { browser: { timeoutMs: 120_001 } } }), /browser\.timeoutMs/)
   assert.doesNotThrow(() => specs({ packConfig: { ssh: { timeoutMs: 600_000 }, browser: { timeoutMs: 1000 } } }))
   const separate = specs({ packConfig: { ssh: { hosts: { scoped: { target: 'user@scoped.example' } } } } })
   assert.equal(await separate.ssh_hosts.execute({}), 'scoped: user@scoped.example')

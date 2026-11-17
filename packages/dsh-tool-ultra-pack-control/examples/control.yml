@@ -1,0 +1,76 @@
+# Merge this plugin entry into your profile's cordis.patch.yml after installation.
+# All hosts and paths are placeholders. Pair Android and start remote CDP manually.
+- id: tool-ultra-pack-control
+  name: '@lvy-jsd/dsh-tool-ultra-pack-control'
+  config:
+    packs:
+      ssh: true
+      ssh-exec: true
+      adb: true
+      adb-root: false
+      desktop: true
+      browser: true
+    readOnly: false
+    disable: []
+    # Exact pack whitelists; [] grants none. Omitted means all enabled host packs.
+    hosts:
+      server:
+        target: 'operator@server.example.com'
+        port: 22
+        identity: /path/to/ssh_key
+        packs: [ssh, ssh-exec]
+      workstation:
+        target: 'operator@desktop.example.com'
+        packs: [desktop, browser]
+        # Omit desktop for automatic graphical-session discovery.
+        desktop:
+          backend: x11
+          env: { DISPLAY: ':0' }
+        browser: { port: 9222 }
+      wayland:
+        target: 'operator@wayland.example.com'
+        packs: [desktop, browser]
+        desktop:
+          backend: niri
+          keyboard: ydotool
+          # Optional seat-specific override; the daemon must already exist.
+          env: { YDOTOOL_SOCKET: /run/ydotoold/socket }
+        browser: { port: 9333 }
+    serials:
+      phone: 'phone.example.com:5555'
+    # Flat settings are inherited by each family, then overridden below.
+    sshBin: ssh
+    multiplex: true
+    connectTimeoutS: 10
+    timeoutMs: 60000
+    maxBytes: 2000000
+    maxChars: 20000
+    maxTransferBytes: 50000000
+    transferDir: /path/to/control/transfers
+    denyPaths: ['^/srv/private(?:/|$)']
+    # Per-family overrides; maps and arrays replace, rather than deep-merge.
+    # ssh also covers ssh-exec; adb also covers adb-root.
+    packConfig:
+      ssh: { timeoutMs: 60000 }
+      adb:
+        adbBin: adb
+        adbConnect: true
+        adbAskInput: true
+        adbUiTtlMs: 30000
+        outputDir: /path/to/control/android-screens
+      desktop:
+        desktopCacheMs: 3000
+        outputDir: /path/to/control/desktop-screens
+      browser:
+        timeoutMs: 30000
+        maxBytes: 16000000
+        maxTransferBytes: 10000000
+        browserAllowPrivate: false
+        browserAllowLocalTcp: false
+        outputDir: /path/to/control/browser-screens
+    # {} asks for every waivable mutation too. Optional named-session exception:
+    allow:
+      example-session: [ssh_run, adb_input, browser_open]
+    # Omit auditFile to use <DSH_HOME>/tool-manager/control-audit.jsonl.
+    # '' explicitly disables the control audit.
+    auditFile: /path/to/control/control-audit.jsonl
