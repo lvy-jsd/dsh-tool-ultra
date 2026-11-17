@@ -52,7 +52,7 @@ export const DEFAULT_GROUP_RULES: GroupRule[] = [
 
 // Group -> category for groups common on DSH hosts.
 export const DEFAULT_GROUP_CATEGORIES: Record<string, string> = {
-  adb: 'device', phone: 'device', desktop: 'device',
+  adb: 'device', 'adb-root': 'device', phone: 'device', desktop: 'device',
   'phone-control': 'device', 'desktop-eyes': 'device',
   github: 'code', nix: 'code', nixos: 'code',
   'bilibili-mcp': 'media', image: 'media', video: 'media',

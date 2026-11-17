@@ -11,4 +11,4 @@
         listInDirectory: true
         # Packs: a name -> the targets tools_load should expand it to.
         # packs:
-        #   android-debug: ["/device/adb", "/device/phone", "adb_logcat"]
+        #   android-debug: ["pack:adb"]

@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" class="android.widget.FrameLayout" package="org.example.app" enabled="true" bounds="[0,0][1080,1920]">
+    <node index="0" text="设置 &amp; Tools" content-desc="" class="android.widget.Button" clickable="true" enabled="true" bounds="[20,100][220,180]" />
+    <node index="1" text="" content-desc="Search &quot;apps&quot;" class="android.widget.ImageButton" clickable="true" enabled="true" bounds="[900,100][1000,200]" />
+    <node index="2" text="Duplicate" class="android.widget.TextView" enabled="true" bounds="[0,200][200,240]" />
+    <node index="3" text="Duplicate" class="android.widget.TextView" enabled="true" bounds="[0,250][200,290]" />
+    <node index="4" text="Disabled" class="android.widget.Button" clickable="true" enabled="false" bounds="[0,300][200,340]">
+      <node text="Disabled child" enabled="true" bounds="[0,300][100,320]" />
+    </node>
+    <node text="Offscreen" enabled="true" bounds="[0,0][0,0]" />
+    <node text="&#x1F50D; &#65; &apos; &lt; &gt;" class="android.widget.TextView" enabled="true" bounds="[1,400][100,449]" />
+  </node>
+</hierarchy>

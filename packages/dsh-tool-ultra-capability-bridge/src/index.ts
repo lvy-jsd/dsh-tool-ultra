@@ -13,7 +13,7 @@
 //
 // Packs come from two places, both optional:
 //
-//   - `packs` in config:    { android-debug: ["/device/adb", "adb_logcat"] }
+//   - `packs` in config:    { android-debug: ["pack:adb"] }
 //   - `registerPack(name, targets)` on the plugin's return value, so another
 //     plugin (a capability store) can declare packs at runtime.
 //
